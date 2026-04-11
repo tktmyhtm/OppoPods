@@ -20,9 +20,9 @@ import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.extra.SuperDialog
-import top.yukonga.miuix.kmp.extra.SuperDropdown
-import top.yukonga.miuix.kmp.extra.SuperSwitch
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 
 @Composable
 fun SettingsPage(
@@ -54,7 +54,7 @@ fun SettingsPage(
     ) {
         item {
             Card {
-                SuperDropdown(
+                OverlayDropdownPreference(
                     title = stringResource(R.string.theme_title),
                     items = themeOptions,
                     selectedIndex = themeMode.value,
@@ -65,12 +65,12 @@ fun SettingsPage(
 
         item {
             Card(modifier = Modifier.padding(top = 12.dp)) {
-                SuperSwitch(
+                SwitchPreference(
                     title = stringResource(R.string.auto_game_mode),
                     checked = autoGameMode.value,
                     onCheckedChange = { onAutoGameModeChange(it) }
                 )
-                SuperSwitch(
+                SwitchPreference(
                     title = stringResource(R.string.open_heytap),
                     summary = stringResource(R.string.open_heytap_summary),
                     checked = openHeyTap.value,
@@ -115,7 +115,7 @@ fun SettingsPage(
         }
     }
 
-    SuperDialog(
+    OverlayDialog(
         title = stringResource(R.string.heytap_warning_title),
         summary = stringResource(R.string.heytap_warning),
         show = showHeyTapWarning,

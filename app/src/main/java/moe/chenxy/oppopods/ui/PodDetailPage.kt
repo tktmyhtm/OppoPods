@@ -19,7 +19,7 @@ import moe.chenxy.oppopods.ui.components.AncSwitch
 import moe.chenxy.oppopods.ui.components.PodStatus
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.extra.SuperSwitch
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 
 @Composable
 fun PodDetailPage(
@@ -67,7 +67,7 @@ fun PodDetailPage(
             Card(
                 modifier = Modifier.padding(horizontal = 12.dp)
             ) {
-                SuperSwitch(
+                SwitchPreference(
                     title = stringResource(R.string.game_mode),
                     summary = stringResource(R.string.game_mode_summary),
                     checked = gameMode,

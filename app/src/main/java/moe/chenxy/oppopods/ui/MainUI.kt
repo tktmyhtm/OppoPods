@@ -231,7 +231,6 @@ fun MainUI(
                         navigationIcon = {
                             IconButton(
                                 onClick = { (context as? Activity)?.finish() },
-                                modifier = Modifier.padding(start = 16.dp)
                             ) {
                                 Icon(
                                     imageVector = MiuixIcons.Back,
@@ -250,7 +249,6 @@ fun MainUI(
                             }
                             IconButton(
                                 onClick = { backStack.add(Screen.Settings) },
-                                modifier = Modifier.padding(end = 16.dp)
                             ) {
                                 Icon(
                                     imageVector = MiuixIcons.Settings,
@@ -301,7 +299,6 @@ fun MainUI(
                         navigationIcon = {
                             IconButton(
                                 onClick = { backStack.removeLast() },
-                                modifier = Modifier.padding(start = 16.dp)
                             ) {
                                 Icon(
                                     imageVector = MiuixIcons.Back,

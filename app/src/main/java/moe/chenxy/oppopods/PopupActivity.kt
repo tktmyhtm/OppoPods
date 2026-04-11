@@ -35,8 +35,8 @@ import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.extra.SuperDialog
-import top.yukonga.miuix.kmp.extra.SuperSwitch
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 
 class PopupActivity : ComponentActivity() {
@@ -177,7 +177,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
     val dialogBgColor = if (isDarkMode) Color(0xFF1A1A1A) else Color(0xFFF7F7F7)
 
     Scaffold(containerColor = Color.Transparent) { _ ->
-        SuperDialog(
+        OverlayDialog(
             title = deviceName.value.ifEmpty { stringResource(R.string.app_name) },
             show = showDialog,
             backgroundColor = dialogBgColor,
@@ -201,7 +201,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    SuperSwitch(
+                    SwitchPreference(
                         title = stringResource(R.string.game_mode),
                         summary = stringResource(R.string.game_mode_summary),
                         checked = gameMode.value,
