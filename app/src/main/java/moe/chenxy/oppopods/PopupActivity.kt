@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -276,7 +278,7 @@ private fun LandscapePopupBody(
     onDone: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Column(modifier = Modifier.weight(0.60f)) {
@@ -296,25 +298,26 @@ private fun LandscapePopupBody(
                 )
             }
         }
-        Column(modifier = Modifier.weight(0.40f)) {
+        Column(
+            modifier = Modifier.weight(0.40f).fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             TextButton(
                 text = stringResource(
                     if (gameMode) R.string.disable_game_mode else R.string.enable_game_mode
                 ),
                 onClick = { onGameModeChange(!gameMode) },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().weight(1f)
             )
-            Spacer(modifier = Modifier.height(6.dp))
             TextButton(
                 text = stringResource(R.string.more),
                 onClick = onMore,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().weight(1f)
             )
-            Spacer(modifier = Modifier.height(6.dp))
             TextButton(
                 text = stringResource(R.string.done),
                 onClick = onDone,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().weight(1f)
             )
         }
     }
