@@ -33,7 +33,9 @@ fun SettingsPage(
     autoGameMode: MutableState<Boolean> = mutableStateOf(false),
     onAutoGameModeChange: (Boolean) -> Unit = {},
     openHeyTap: MutableState<Boolean> = mutableStateOf(false),
-    onOpenHeyTapChange: (Boolean) -> Unit = {}
+    onOpenHeyTapChange: (Boolean) -> Unit = {},
+    adaptiveMode: MutableState<Boolean> = mutableStateOf(true),
+    onAdaptiveModeChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val showHeyTapWarning = remember { mutableStateOf(false) }
@@ -65,6 +67,13 @@ fun SettingsPage(
 
         item {
             Card(modifier = Modifier.padding(top = 12.dp)) {
+                // Adaptive模式开关：控制耳机自适应降噪模式的启用状态
+                SwitchPreference(
+                    title = stringResource(R.string.adaptive_mode),
+                    summary = stringResource(R.string.adaptive_mode_summary),
+                    checked = adaptiveMode.value,
+                    onCheckedChange = { onAdaptiveModeChange(it) }
+                )
                 SwitchPreference(
                     title = stringResource(R.string.auto_game_mode),
                     checked = autoGameMode.value,

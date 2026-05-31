@@ -61,6 +61,8 @@ object RfcommController {
     lateinit var currentBatteryParams: BatteryParams
     private var currentAnc: Int = 1
     private var currentGameMode: Boolean = false
+    // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
+    private var adaptiveModeEnabled: Boolean = true
     private var lastKnownCaseBattery: Int = 0
     private var lastKnownCaseCharging: Boolean = false
     private var cachedDeviceName: String = ""
@@ -140,6 +142,15 @@ object RfcommController {
             }
             OppoPodsAction.ACTION_CYCLE_ANC -> {
                 cycleAnc()
+            }
+            OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED -> {
+                // 跨进程同步 Adaptive 模式开关状态，确保 cycleAnc() 使用实时值
+                adaptiveModeEnabled = intent.getBooleanExtra("enabled", true)
+                Log.d(TAG, "Adaptive mode synced: $adaptiveModeEnabled")
+                // 若关闭 Adaptive 且当前处于 Adaptive 模式，自动切换至降噪模式
+                if (!adaptiveModeEnabled && currentAnc == 4) {
+                    setANCMode(2)
+                }
             }
         }
     }
@@ -244,6 +255,9 @@ object RfcommController {
         mDevice = device
         mPrefsBridge = prefsBridge
         cachedDeviceName = device.name ?: ""
+        // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
+        adaptiveModeEnabled = mPrefsBridge.name("oppopods_settings").getBoolean("adaptive_mode", true)
+        Log.d(TAG, "Adaptive mode initial: $adaptiveModeEnabled")
 
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             this.addAction(OppoPodsAction.ACTION_ANC_SELECT)
@@ -252,6 +266,7 @@ object RfcommController {
             this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
             this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
+            this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
         }, Context.RECEIVER_EXPORTED)
 
         Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {
@@ -424,12 +439,12 @@ object RfcommController {
     }
 
     fun cycleAnc() {
-        // 循环顺序：降噪 → 通透 → 关
+        // 使用广播同步的缓存值，避免 SharedPreferences 跨进程缓存导致读取过时值
         val next = when (currentAnc) {
-            2 -> 4  // NC -> Adaptive
-            4 -> 3  // Adaptive -> Transparency
-            3 -> 1  // Transparency -> OFF
-            else -> 2  // OFF or unknown -> NC
+            2 -> if (adaptiveModeEnabled) 4 else 3  // NC → Adaptive（若启用）或 Transparency
+            4 -> 3  // Adaptive → Transparency
+            3 -> 1  // Transparency → OFF
+            else -> 2  // OFF or unknown → NC
         }
         setANCMode(next)
     }

@@ -46,7 +46,8 @@ private const val ANIM_DURATION = 300
 fun AncSwitch(
     ancStatus: NoiseControlMode,
     onAncModeChange: (NoiseControlMode) -> Unit,
-    compact: Boolean = false
+    compact: Boolean = false,
+    adaptiveModeEnabled: Boolean = true
 ) {
     val verticalPadding = if (compact) 8.dp else 16.dp
     Row(
@@ -64,14 +65,17 @@ fun AncSwitch(
             modifier = Modifier.weight(1f),
             compact = compact
         )
-        AncButton(
-            offIconRes = R.drawable.ic_adaptive_off,
-            onIconRes = R.drawable.ic_adaptive_on,
-            label = stringResource(R.string.adaptive_title),
-            isSelected = ancStatus == NoiseControlMode.ADAPTIVE,
-            onClick = { onAncModeChange(NoiseControlMode.ADAPTIVE) },
-            modifier = Modifier.weight(1f)
-        )
+        // Adaptive模式按钮：仅当设置中启用Adaptive模式时显示
+        if (adaptiveModeEnabled) {
+            AncButton(
+                offIconRes = R.drawable.ic_adaptive_off,
+                onIconRes = R.drawable.ic_adaptive_on,
+                label = stringResource(R.string.adaptive_title),
+                isSelected = ancStatus == NoiseControlMode.ADAPTIVE,
+                onClick = { onAncModeChange(NoiseControlMode.ADAPTIVE) },
+                modifier = Modifier.weight(1f)
+            )
+        }
         AncButton(
             offIconRes = R.drawable.ic_transparent_off,
             onIconRes = R.drawable.ic_transparent_on,

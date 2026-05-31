@@ -43,5 +43,7 @@
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
     <string name="cycle_anc">切换降噪</string>
+    <string name="adaptive_mode">自适应模式</string>
+    <string name="adaptive_mode_summary">为兼容耳机启用自适应降噪模式，关闭后将隐藏该选项并禁用相关音频处理</string>
     <string name="notification_btn_disconnect">断开连接</string>
 </resources>
