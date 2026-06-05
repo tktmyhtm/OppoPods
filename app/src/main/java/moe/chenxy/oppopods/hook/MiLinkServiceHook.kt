@@ -245,12 +245,12 @@ object MiLinkServiceHook : HookContext() {
         }
     }
 
-    private fun miLinkBatteryLevels(): List<Int> {
+    private fun miLinkBatteryLevels(): List<Any> {
         loadState()
         val left = batteryValue(currentBattery.left)
         val right = batteryValue(currentBattery.right)
         val box = batteryValue(currentBattery.case)
-        return listOf(box, left, right, 0, 0, 0)
+        return listOf(box, left, right, true, true, true)
     }
 
     private fun batteryPercentForMiLink(): Int {
