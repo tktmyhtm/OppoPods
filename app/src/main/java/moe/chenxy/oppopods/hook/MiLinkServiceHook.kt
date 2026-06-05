@@ -263,7 +263,7 @@ object MiLinkServiceHook : HookContext() {
 
     private fun batteryValue(params: moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams?): Int {
         if (params?.isConnected != true) return 255
-        return params.battery.coerceIn(0, 100) or 128
+        return params.battery.coerceIn(0, 100)
     }
 
     private fun sendOppoAnc(mode: Int, fallbackContext: Context? = null) {
