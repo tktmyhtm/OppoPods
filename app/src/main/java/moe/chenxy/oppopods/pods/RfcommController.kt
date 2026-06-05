@@ -94,6 +94,9 @@ object RfcommController {
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             mContext!!.sendBroadcast(this)
         }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_ANC_CHANGED) {
+            putExtra("status", status)
+        }
     }
 
     private fun changeUIBatteryStatus(status: BatteryParams) {
@@ -102,6 +105,9 @@ object RfcommController {
             this.`package` = BuildConfig.APPLICATION_ID
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             mContext!!.sendBroadcast(this)
+        }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED) {
+            putExtra("status", status)
         }
     }
 
@@ -127,6 +133,9 @@ object RfcommController {
                     this.`package` = BuildConfig.APPLICATION_ID
                     this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                     mContext!!.sendBroadcast(this)
+                }
+                sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_CONNECTED) {
+                    putExtra("device_name", mDevice.name ?: cachedDeviceName)
                 }
             }
             OppoPodsAction.ACTION_ANC_SELECT -> {
@@ -275,6 +284,9 @@ object RfcommController {
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             context.sendBroadcast(this)
         }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_CONNECTED) {
+            putExtra("device_name", cachedDeviceName)
+        }
 
         MediaControl.mContext = mContext
         mediaRouter = MediaRouter2.getInstance(mContext!!)
@@ -319,6 +331,22 @@ object RfcommController {
                 if (isConnected) {
                     queryStatus()
                 }
+            }
+        }
+    }
+
+    private fun sendExternalPodsStatusBroadcast(action: String, fill: Intent.() -> Unit = {}) {
+        val ctx = mContext ?: return
+        listOf("com.milink.service", "com.xiaomi.bluetooth").forEach { targetPackage ->
+            Intent(action).apply {
+                if (::mDevice.isInitialized) {
+                    putExtra("address", mDevice.address)
+                    putExtra("device_name", mDevice.name ?: cachedDeviceName)
+                }
+                fill()
+                setPackage(targetPackage)
+                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                ctx.sendBroadcast(this)
             }
         }
     }
