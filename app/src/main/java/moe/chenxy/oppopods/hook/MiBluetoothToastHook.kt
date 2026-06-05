@@ -32,6 +32,40 @@ object MiBluetoothToastHook : HookContext() {
     private var localAncMode = 1
 
     override fun onHook() {
+        var showConnectionNotificationEnabled =
+            prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
+        var notificationIslandStyleEnabled =
+            prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
+        val notificationIslandState = mutableMapOf<String, Boolean>()
+        var lastNotificationDevice: BluetoothDevice? = null
+        var lastNotificationBatteryParams: BatteryParams? = null
+
+        fun shouldUseNotificationIslandStyle(intent: Intent? = null): Boolean {
+            val showConnectionNotification = intent?.getBooleanExtra(
+                OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
+                showConnectionNotificationEnabled
+            ) ?: showConnectionNotificationEnabled
+            val notificationIslandStyle = intent?.getBooleanExtra(
+                OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
+                notificationIslandStyleEnabled
+            ) ?: notificationIslandStyleEnabled
+            return showConnectionNotification && notificationIslandStyle
+        }
+
+        fun syncNotificationSettings(intent: Intent) {
+            showConnectionNotificationEnabled = intent.getBooleanExtra(
+                OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
+                showConnectionNotificationEnabled
+            )
+            notificationIslandStyleEnabled = intent.getBooleanExtra(
+                OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
+                notificationIslandStyleEnabled
+            )
+            Log.d(
+                "OppoPods",
+                "Notification settings synced in MiBluetooth: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+            )
+        }
 
         fun deleteIntent(context: Context, bluetoothDevice: BluetoothDevice): PendingIntent? {
             val intent = Intent("com.android.bluetooth.headset.notification.cancle")
@@ -40,7 +74,12 @@ object MiBluetoothToastHook : HookContext() {
         }
 
         @SuppressLint("WrongConstant")
-        fun createPodsNotification(bluetoothDevice: BluetoothDevice?, context: Context, batteryParams: BatteryParams) {
+        fun createPodsNotification(
+            bluetoothDevice: BluetoothDevice?,
+            context: Context,
+            batteryParams: BatteryParams,
+            showNotificationAsIsland: Boolean = shouldUseNotificationIslandStyle()
+        ) {
             val miheadset_notification_Box = context.resources.getIdentifier("miheadset_notification_Box", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_LeftEar = context.resources.getIdentifier("miheadset_notification_LeftEar", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_RightEar = context.resources.getIdentifier("miheadset_notification_RightEar", "string", "com.xiaomi.bluetooth")
@@ -73,6 +112,13 @@ object MiBluetoothToastHook : HookContext() {
 
                 val contentText: String = caseBattStr + leftEar + rightEar
                 val notificationManager = context.getSystemService("notification") as NotificationManager
+                if (!showNotificationAsIsland && notificationIslandState[address] == true) {
+                    notificationManager.cancelAsUser(
+                        "BTHeadset$address",
+                        10003,
+                        SystemApisUtils.getUserAllUserHandle()
+                    )
+                }
                 notificationManager.createNotificationChannel(
                     NotificationChannel(
                         "BTHeadset$address",
@@ -112,8 +158,6 @@ object MiBluetoothToastHook : HookContext() {
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
-                val showNotificationAsIsland = prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true) &&
-                    prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
                 val focusExtras = if (showNotificationAsIsland) FocusNotification.buildV3 {
                     val logo = createPicture("key_headset", headsetIcon)
                     enableFloat = true
@@ -215,6 +259,9 @@ object MiBluetoothToastHook : HookContext() {
                         .build(),
                     SystemApisUtils.getUserAllUserHandle()
                 )
+                notificationIslandState[address] = showNotificationAsIsland
+                lastNotificationDevice = bluetoothDevice
+                lastNotificationBatteryParams = batteryParams
             } catch (e: Exception) {
                 Log.e("OppoPods", "Failed to create Pod Notification", e)
             }
@@ -226,6 +273,9 @@ object MiBluetoothToastHook : HookContext() {
                 if (address.isNotEmpty()) {
                     val notificationManager = context.getSystemService("notification") as NotificationManager
                     notificationManager.cancelAsUser("BTHeadset$address", 10003, SystemApisUtils.getUserAllUserHandle())
+                    notificationIslandState.remove(address)
+                    lastNotificationDevice = null
+                    lastNotificationBatteryParams = null
                 }
             } catch (e: Exception) {
                 Log.e("OppoPods", "Failed to cancel Pod Notification!", e)
@@ -240,16 +290,16 @@ object MiBluetoothToastHook : HookContext() {
                         override fun onReceive(p0: Context?, p1: Intent?) {
                             if (p1?.action == "chen.action.oppopods.sendstrongtoast") {
                                 val batteryParams = p1.getParcelableExtra("batteryParams", BatteryParams::class.java)!!
-                                val showNotificationAsIsland =
-                                    prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true) &&
-                                        prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
-                                if (showNotificationAsIsland) {
-                                    FocusIslandUtil.showBatteryIsland(context, batteryParams)
-                                }
+                                FocusIslandUtil.showBatteryIsland(context, batteryParams)
                             } else if (p1?.action == "chen.action.oppopods.updatepodsnotification") {
                                 val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)
-                                createPodsNotification(device, context, batteryParams!!)
+                                createPodsNotification(
+                                    device,
+                                    context,
+                                    batteryParams!!,
+                                    shouldUseNotificationIslandStyle(p1)
+                                )
                             } else if (p1?.action == "chen.action.oppopods.cancelpodsnotification") {
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java) as BluetoothDevice
                                 cancelNotification(device, context)
@@ -263,6 +313,20 @@ object MiBluetoothToastHook : HookContext() {
                                 // 若关闭 Adaptive 且本地缓存的当前模式为 Adaptive，重置为降噪模式
                                 if (!adaptiveEnabled && localAncMode == 4) {
                                     localAncMode = 2
+                                }
+                            } else if (p1?.action == OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED) {
+                                syncNotificationSettings(p1)
+                                val lastDevice = lastNotificationDevice
+                                val lastBatteryParams = lastNotificationBatteryParams
+                                if (!showConnectionNotificationEnabled) {
+                                    lastDevice?.let { cancelNotification(it, context) }
+                                } else if (lastDevice != null && lastBatteryParams != null) {
+                                    createPodsNotification(
+                                        lastDevice,
+                                        context,
+                                        lastBatteryParams,
+                                        shouldUseNotificationIslandStyle()
+                                    )
                                 }
                             } else if (p1?.action == OppoPodsAction.ACTION_CYCLE_ANC) {
                                 // 循环切换降噪模式：读取Adaptive模式偏好，关闭时跳过Adaptive仅三模式循环
@@ -291,6 +355,7 @@ object MiBluetoothToastHook : HookContext() {
                     intentFilter.addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
                     // 监听 Adaptive 模式开关状态变更广播，确保跨进程实时同步
                     intentFilter.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
+                    intentFilter.addAction(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED)
                     context.registerReceiver(broadcastReceiver, intentFilter,
                         Context.RECEIVER_EXPORTED)
         }

@@ -62,6 +62,8 @@ object RfcommController {
     private var currentGameMode: Boolean = false
     // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
     private var adaptiveModeEnabled: Boolean = true
+    private var showConnectionNotificationEnabled: Boolean = true
+    private var notificationIslandStyleEnabled: Boolean = true
     private var lastKnownCaseBattery: Int = 0
     private var lastKnownCaseCharging: Boolean = false
     private var cachedDeviceName: String = ""
@@ -111,6 +113,28 @@ object RfcommController {
         }
     }
 
+    private fun refreshPodsNotification() {
+        val context = mContext ?: return
+        if (!::mDevice.isInitialized) return
+
+        if (!showConnectionNotificationEnabled) {
+            cancelPodsNotificationByMiuiBt(context, mDevice)
+            return
+        }
+
+        if (!::currentBatteryParams.isInitialized) return
+        if (!notificationIslandStyleEnabled) {
+            cancelPodsNotificationByMiuiBt(context, mDevice)
+        }
+        MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
+            context,
+            currentBatteryParams,
+            mDevice,
+            showConnectionNotificationEnabled,
+            notificationIslandStyleEnabled
+        )
+    }
+
     fun handleUIEvent(intent: Intent) {
         when (intent.action) {
             OppoPodsAction.ACTION_PODS_UI_INIT -> {
@@ -151,6 +175,21 @@ object RfcommController {
                 if (!adaptiveModeEnabled && currentAnc == 4) {
                     setANCMode(2)
                 }
+            }
+            OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED -> {
+                showConnectionNotificationEnabled = intent.getBooleanExtra(
+                    OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
+                    showConnectionNotificationEnabled
+                )
+                notificationIslandStyleEnabled = intent.getBooleanExtra(
+                    OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
+                    notificationIslandStyleEnabled
+                )
+                Log.d(
+                    TAG,
+                    "Notification settings synced: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+                )
+                refreshPodsNotification()
             }
         }
     }
@@ -201,19 +240,19 @@ object RfcommController {
 
         val batteryParams = BatteryParams(left, right, case)
         currentBatteryParams = batteryParams
-        val showConnectionNotification =
-            mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
-        val showNotificationAsIsland = showConnectionNotification &&
-            mPrefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
 
         if (shouldShowToast) {
-            if (showNotificationAsIsland) {
-                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
-            }
+            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
             mShowedConnectedToast = true
         }
-        if (showConnectionNotification) {
-            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(mContext!!, batteryParams, mDevice)
+        if (showConnectionNotificationEnabled) {
+            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
+                mContext!!,
+                batteryParams,
+                mDevice,
+                showConnectionNotificationEnabled,
+                notificationIslandStyleEnabled
+            )
         } else {
             cancelPodsNotificationByMiuiBt(mContext!!, mDevice)
         }
@@ -267,7 +306,15 @@ object RfcommController {
         cachedDeviceName = device.name ?: ""
         // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
         adaptiveModeEnabled = mPrefs.getBoolean("adaptive_mode", true)
+        showConnectionNotificationEnabled =
+            mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
+        notificationIslandStyleEnabled =
+            mPrefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
         Log.d(TAG, "Adaptive mode initial: $adaptiveModeEnabled")
+        Log.d(
+            TAG,
+            "Notification settings initial: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+        )
 
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             this.addAction(OppoPodsAction.ACTION_ANC_SELECT)
@@ -276,6 +323,7 @@ object RfcommController {
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
             this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
             this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
+            this.addAction(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED)
         }, Context.RECEIVER_EXPORTED)
 
         Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {

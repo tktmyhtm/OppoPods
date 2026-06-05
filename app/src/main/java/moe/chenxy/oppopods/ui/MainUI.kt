@@ -227,6 +227,21 @@ fun MainUI(
         }
     }
 
+    fun broadcastNotificationSettings(
+        showConnectionNotificationEnabled: Boolean,
+        notificationIslandStyleEnabled: Boolean
+    ) {
+        listOf("com.android.bluetooth", "com.xiaomi.bluetooth").forEach { targetPackage ->
+            Intent(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED).apply {
+                setPackage(targetPackage)
+                putExtra(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, showConnectionNotificationEnabled)
+                putExtra(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, notificationIslandStyleEnabled)
+                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                context.sendBroadcast(this)
+            }
+        }
+    }
+
     // Each entry has its own Scaffold+TopAppBar so the full page transitions together
     val entryProvider = entryProvider<Screen> {
         entry<Screen.Home> {
@@ -358,6 +373,7 @@ fun MainUI(
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, it)
                             .apply()
+                        broadcastNotificationSettings(it, notificationIslandStyle.value)
                     },
                     notificationIslandStyle = notificationIslandStyle,
                     onNotificationIslandStyleChange = {
@@ -365,6 +381,7 @@ fun MainUI(
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, it)
                             .apply()
+                        broadcastNotificationSettings(showConnectionNotification.value, it)
                     }
                 )
             }
