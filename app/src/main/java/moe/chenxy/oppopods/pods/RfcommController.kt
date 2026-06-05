@@ -71,16 +71,6 @@ object RfcommController {
 
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(p0: Context?, p1: Intent?) {
-            if (p1?.action == OppoPodsAction.ACTION_GET_PODS_MAC) {
-                Intent(OppoPodsAction.ACTION_PODS_MAC_RECEIVED).apply {
-                    Log.i(TAG, "${p1.action} ,mac ${mDevice.address}")
-                    this.`package` = "com.android.systemui"
-                    this.putExtra("mac", mDevice.address)
-                    this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                    p0?.sendBroadcast(this)
-                    return
-                }
-            }
             handleUIEvent(p1!!)
         }
     }
@@ -270,7 +260,6 @@ object RfcommController {
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             this.addAction(OppoPodsAction.ACTION_ANC_SELECT)
             this.addAction(OppoPodsAction.ACTION_PODS_UI_INIT)
-            this.addAction(OppoPodsAction.ACTION_GET_PODS_MAC)
             this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
             this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)

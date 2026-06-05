@@ -11,7 +11,6 @@ class HookEntry : XposedModule() {
         if (!param.isFirstPackage) return
 
         when (param.packageName) {
-            "com.android.systemui" -> loadHook(SystemUIPluginHook, param.defaultClassLoader)
             "com.android.bluetooth" -> loadHook(HeadsetStateDispatcher, param.defaultClassLoader)
             "com.milink.service" -> loadHook(MiLinkServiceHook, param.defaultClassLoader)
             "com.xiaomi.bluetooth" -> loadHook(MiBluetoothToastHook, param.defaultClassLoader)
