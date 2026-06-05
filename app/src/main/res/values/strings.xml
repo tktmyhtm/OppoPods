@@ -44,5 +44,9 @@
     <string name="cycle_anc">Cycle ANC</string>
     <string name="adaptive_mode">Adaptive Mode</string>
     <string name="adaptive_mode_summary">Enable Adaptive noise control mode for compatible earphones</string>
+    <string name="show_connection_notification">Show notification on connect</string>
+    <string name="show_connection_notification_summary">Show the headset battery notification after the earphones connect</string>
+    <string name="notification_island_style">Show notification as Super Island</string>
+    <string name="notification_island_style_summary">Use HyperOS Focus Island style for the connection notification</string>
     <string name="notification_btn_disconnect">Disconnect</string>
 </resources>

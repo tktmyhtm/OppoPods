@@ -201,12 +201,22 @@ object RfcommController {
 
         val batteryParams = BatteryParams(left, right, case)
         currentBatteryParams = batteryParams
+        val showConnectionNotification =
+            mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
+        val showNotificationAsIsland = showConnectionNotification &&
+            mPrefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
 
         if (shouldShowToast) {
-            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
+            if (showNotificationAsIsland) {
+                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
+            }
             mShowedConnectedToast = true
         }
-        MiuiStrongToastUtil.showPodsNotificationByMiuiBt(mContext!!, batteryParams, mDevice)
+        if (showConnectionNotification) {
+            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(mContext!!, batteryParams, mDevice)
+        } else {
+            cancelPodsNotificationByMiuiBt(mContext!!, mDevice)
+        }
         changeUIBatteryStatus(batteryParams)
 
         lastTempBatt = if (left.isConnected && right.isConnected)

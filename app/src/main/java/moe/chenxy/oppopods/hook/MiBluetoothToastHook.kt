@@ -21,6 +21,7 @@ import moe.chenxy.oppopods.utils.SystemApisUtils.cancelAsUser
 import moe.chenxy.oppopods.utils.SystemApisUtils.notifyAsUser
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import moe.chenxy.oppopods.R
 
 @SuppressLint("MissingPermission")
@@ -57,17 +58,17 @@ object MiBluetoothToastHook : HookContext() {
                 }
 
                 val caseBattStr = if (batteryParams.case != null && batteryParams.case!!.isConnected)
-                    "${context.resources.getString(miheadset_notification_Box)}${batteryParams.case!!.battery}%" +
-                            "${if (batteryParams.case!!.isCharging) "⚡ " else " "}\n"
+                    "${context.resources.getString(miheadset_notification_Box)}：${batteryParams.case!!.battery} %" +
+                            "${if (batteryParams.case!!.isCharging) " ⚡" else ""}\n"
                 else ""
                 val leftEar = if (batteryParams.left != null && batteryParams.left!!.isConnected)
-                    "${context.resources.getString(miheadset_notification_LeftEar)}${batteryParams.left!!.battery}%" +
-                        (if (batteryParams.left!!.isCharging) "⚡" else "")
+                    "${context.resources.getString(miheadset_notification_LeftEar)}：${batteryParams.left!!.battery} %" +
+                        (if (batteryParams.left!!.isCharging) " ⚡" else "")
                 else ""
-                val leftToRight = if (batteryParams.left?.isConnected == true && batteryParams.right?.isConnected == true) " " else ""
+                val leftToRight = if (batteryParams.left?.isConnected == true && batteryParams.right?.isConnected == true) " | " else ""
                 val rightEar = if (batteryParams.right != null && batteryParams.right!!.isConnected)
-                    "$leftToRight${context.resources.getString(miheadset_notification_RightEar)}${batteryParams.right!!.battery}%" +
-                        (if (batteryParams.right!!.isCharging) "⚡ " else " ")
+                    "$leftToRight${context.resources.getString(miheadset_notification_RightEar)}：${batteryParams.right!!.battery} %" +
+                        (if (batteryParams.right!!.isCharging) " ⚡" else "")
                 else ""
 
                 val contentText: String = caseBattStr + leftEar + rightEar
@@ -111,7 +112,9 @@ object MiBluetoothToastHook : HookContext() {
                     },
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
-                val focusExtras = FocusNotification.buildV3 {
+                val showNotificationAsIsland = prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true) &&
+                    prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
+                val focusExtras = if (showNotificationAsIsland) FocusNotification.buildV3 {
                     val logo = createPicture("key_headset", headsetIcon)
                     enableFloat = true
                     ticker = alias ?: ""
@@ -175,7 +178,7 @@ object MiBluetoothToastHook : HookContext() {
                             actionTitle = disconnectLabel
                         }
                     }
-                }
+                } else null
                 // AOD 息屏显示：左右耳电量拼合后注入 aodTitle
                 if (focusExtras != null) {
                     val aodParts = mutableListOf<String>()
@@ -237,8 +240,12 @@ object MiBluetoothToastHook : HookContext() {
                         override fun onReceive(p0: Context?, p1: Intent?) {
                             if (p1?.action == "chen.action.oppopods.sendstrongtoast") {
                                 val batteryParams = p1.getParcelableExtra("batteryParams", BatteryParams::class.java)!!
-                                // Use Focus Island (HyperOS 3+) for battery display
-                                FocusIslandUtil.showBatteryIsland(context, batteryParams)
+                                val showNotificationAsIsland =
+                                    prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true) &&
+                                        prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
+                                if (showNotificationAsIsland) {
+                                    FocusIslandUtil.showBatteryIsland(context, batteryParams)
+                                }
                             } else if (p1?.action == "chen.action.oppopods.updatepodsnotification") {
                                 val batteryParams = p1.getParcelableExtra<BatteryParams>("batteryParams", BatteryParams::class.java)
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)

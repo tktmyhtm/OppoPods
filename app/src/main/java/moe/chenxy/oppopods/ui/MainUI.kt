@@ -51,6 +51,7 @@ import moe.chenxy.oppopods.pods.AppRfcommController
 import moe.chenxy.oppopods.pods.NoiseControlMode
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
@@ -92,6 +93,12 @@ fun MainUI(
     val openHeyTap = remember { mutableStateOf(prefs.getBoolean("open_heytap", false)) }
     // Adaptive模式偏好设置（持久化存储），默认开启
     val adaptiveMode = remember { mutableStateOf(prefs.getBoolean("adaptive_mode", true)) }
+    val showConnectionNotification = remember {
+        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true))
+    }
+    val notificationIslandStyle = remember {
+        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true))
+    }
 
     val appController = remember { AppRfcommController() }
     val appConnState by appController.connectionState.collectAsState()
@@ -344,6 +351,20 @@ fun MainUI(
                         if (!it && displayAnc == NoiseControlMode.ADAPTIVE) {
                             setAncMode(NoiseControlMode.NOISE_CANCELLATION)
                         }
+                    },
+                    showConnectionNotification = showConnectionNotification,
+                    onShowConnectionNotificationChange = {
+                        showConnectionNotification.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, it)
+                            .apply()
+                    },
+                    notificationIslandStyle = notificationIslandStyle,
+                    onNotificationIslandStyleChange = {
+                        notificationIslandStyle.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, it)
+                            .apply()
                     }
                 )
             }
