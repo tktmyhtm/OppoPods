@@ -15,6 +15,7 @@
     <string name="off">Off</string>
     <string name="noise_cancellation_title">NC</string>
     <string name="transparency_title">Transparency</string>
+    <string name="adaptive_title">Adaptive</string>
     <string name="pod_case">Case</string>
     <string name="batt_left_pod">Left</string>
     <string name="batt_right_pod">Right</string>
@@ -40,4 +41,8 @@
     <string name="theme_follow_system">Follow System</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
+    <string name="cycle_anc">Cycle ANC</string>
+    <string name="adaptive_mode">Adaptive Mode</string>
+    <string name="adaptive_mode_summary">Enable Adaptive noise control mode for compatible earphones</string>
+    <string name="notification_btn_disconnect">Disconnect</string>
 </resources>

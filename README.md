@@ -12,7 +12,7 @@ Based on [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen.
 
 ### Features
 
-- **ANC Control** — Switch between Off / Noise Cancellation / Transparency
+- **ANC Control** — Switch between Off / Noise Cancellation / Adaptive / Transparency
 - **Game Mode** — Low-latency audio toggle with optional auto-enable on connect
 - **Battery Display** — Real-time battery level for left ear, right ear, and charging case
 - **Quick Popup** — Tap notification or Control Center card to open a compact floating dialog with battery, ANC, and game mode controls; tap "More" to enter the full app
@@ -46,7 +46,7 @@ AA [TotalLen] 00 00 [Cmd 2B LE] [Seq] [PayLen 2B LE] [Payload...]
 
 | Function | Cmd | Payload |
 |----------|-----|---------|
-| ANC Control | `0x0404` | `01 01 <mode>` — `01`=Off, `02`=NC, `04`=Transparency |
+| ANC Control | `0x0404` | `01 01 <mode>` — `01`=Off, `02`=NC, `04`=Transparency, `00 08`=Adaptive |
 | Game Mode Set | `0x0403` | `28 01`=On, `28 00`=Off |
 | Battery Query | `0x0106` | (empty) |
 | Battery Response | `0x8106` | Pairs of `[Index, RawValue]` — battery=`val & 0x7F`, charging=`(val & 0x80) != 0` |
@@ -92,7 +92,7 @@ GPL-3.0
 
 ### 功能
 
-- **降噪控制** — 在关闭 / 降噪 / 通透模式之间切换
+- **降噪控制** — 在关闭 / 降噪 / 自适应 / 通透模式之间切换
 - **游戏模式** — 低延迟音频开关，支持连接时自动开启
 - **电量显示** — 实时显示左耳、右耳、充电盒电量
 - **快捷弹窗** — 点击通知或控制中心耳机卡片，弹出浮窗显示电量、降噪、游戏模式控制；点击「更多」进入完整页面
@@ -126,7 +126,7 @@ AA [总长度] 00 00 [命令 2字节小端] [序列号] [载荷长度 2字节小
 
 | 功能 | 命令 | 载荷 |
 |------|------|------|
-| 降噪控制 | `0x0404` | `01 01 <模式>` — `01`=关闭, `02`=降噪, `04`=通透 |
+| 降噪控制 | `0x0404` | `01 01 <模式>` — `01`=关闭, `02`=降噪, `04`=通透, `00 08`=自适应 |
 | 游戏模式设置 | `0x0403` | `28 01`=开, `28 00`=关 |
 | 电量查询 | `0x0106` | （空） |
 | 电量响应 | `0x8106` | `[索引, 原始值]` 对 — 电量=`val & 0x7F`，充电中=`(val & 0x80) != 0` |

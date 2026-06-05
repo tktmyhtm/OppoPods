@@ -84,6 +84,8 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
 
     val prefs = remember { context.getSharedPreferences("oppopods_settings", Context.MODE_PRIVATE) }
     val themeMode = remember { prefs.getInt("theme_mode", 0) }
+    // 读取Adaptive模式偏好设置
+    val adaptiveModeEnabled = remember { prefs.getBoolean("adaptive_mode", true) }
     val systemDark = isSystemInDarkTheme()
     val isDarkMode = when (themeMode) {
         1 -> false
@@ -106,6 +108,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                             1 -> NoiseControlMode.OFF
                             2 -> NoiseControlMode.NOISE_CANCELLATION
                             3 -> NoiseControlMode.TRANSPARENCY
+                            4 -> NoiseControlMode.ADAPTIVE
                             else -> NoiseControlMode.OFF
                         }
                     }
@@ -163,6 +166,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
             NoiseControlMode.OFF -> 1
             NoiseControlMode.NOISE_CANCELLATION -> 2
             NoiseControlMode.TRANSPARENCY -> 3
+            NoiseControlMode.ADAPTIVE -> 4
         }
         Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
             putExtra("status", status)
@@ -201,7 +205,8 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                     onAncModeChange = ::setAncMode,
                     onGameModeChange = ::setGameMode,
                     onMore = onMore,
-                    onDone = { showDialog.value = false }
+                    onDone = { showDialog.value = false },
+                    adaptiveModeEnabled = adaptiveModeEnabled
                 )
             } else {
                 PortraitPopupBody(
@@ -211,7 +216,8 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                     onAncModeChange = ::setAncMode,
                     onGameModeChange = ::setGameMode,
                     onMore = onMore,
-                    onDone = { showDialog.value = false }
+                    onDone = { showDialog.value = false },
+                    adaptiveModeEnabled = adaptiveModeEnabled
                 )
             }
         }
@@ -226,7 +232,8 @@ private fun PortraitPopupBody(
     onAncModeChange: (NoiseControlMode) -> Unit,
     onGameModeChange: (Boolean) -> Unit,
     onMore: () -> Unit,
-    onDone: () -> Unit
+    onDone: () -> Unit,
+    adaptiveModeEnabled: Boolean = true
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -237,7 +244,7 @@ private fun PortraitPopupBody(
         }
         Spacer(modifier = Modifier.height(12.dp))
         Card(modifier = Modifier.fillMaxWidth()) {
-            AncSwitch(ancMode, onAncModeChange = onAncModeChange)
+            AncSwitch(ancMode, onAncModeChange = onAncModeChange, adaptiveModeEnabled = adaptiveModeEnabled)
         }
         Spacer(modifier = Modifier.height(12.dp))
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -275,7 +282,8 @@ private fun LandscapePopupBody(
     onAncModeChange: (NoiseControlMode) -> Unit,
     onGameModeChange: (Boolean) -> Unit,
     onMore: () -> Unit,
-    onDone: () -> Unit
+    onDone: () -> Unit,
+    adaptiveModeEnabled: Boolean = true
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Max),
@@ -294,7 +302,8 @@ private fun LandscapePopupBody(
                 AncSwitch(
                     ancMode,
                     onAncModeChange = onAncModeChange,
-                    compact = true
+                    compact = true,
+                    adaptiveModeEnabled = adaptiveModeEnabled
                 )
             }
         }

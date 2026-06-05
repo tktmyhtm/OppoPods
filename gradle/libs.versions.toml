@@ -1,13 +1,14 @@
 [versions]
 agp = "9.1.0"
+focusApi = "1.4"
 kotlin = "2.3.20"
 ksp = "2.3.6"
 coreKtx = "1.17.0"
 androidx-activity-compose = "1.13.0"
 composeBom = "2025.05.00"
 kotlinxSerializationJson = "1.9.0"
-xposedApi = "82"
-yukihookApi = "1.3.1"
+libxposedApi = "101.0.1"
+libxposedService = "101.0.0"
 miuix = "0.9.0"
 navigation3 = "1.1.0-rc01"
 
@@ -23,9 +24,8 @@ compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "
 
 [libraries]
 coreKtx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
-xposedApi = { group = "de.robv.android.xposed", name = "api", version.ref = "xposedApi" }
-yukihookApi = { group = "com.highcapable.yukihookapi", name = "api", version.ref = "yukihookApi" }
-yukihookKsp = { group = "com.highcapable.yukihookapi", name = "ksp-xposed", version.ref = "yukihookApi" }
+libxposedApi = { group = "io.github.libxposed", name = "api", version.ref = "libxposedApi" }
+libxposedService = { group = "io.github.libxposed", name = "service", version.ref = "libxposedService" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity-compose" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
@@ -38,3 +38,4 @@ miuix-preference = { group = "top.yukonga.miuix.kmp", name = "miuix-preference-a
 miuix-icons = { group = "top.yukonga.miuix.kmp", name = "miuix-icons-android", version.ref = "miuix" }
 miuix-navigation3-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-navigation3-ui-android", version.ref = "miuix" }
 navigation3-runtime = { group = "androidx.navigation3", name = "navigation3-runtime", version.ref = "navigation3" }
+focus-api = { group = "com.xzakota.hyper.notification", name = "focus-api", version.ref = "focusApi" }
