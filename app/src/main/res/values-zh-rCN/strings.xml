@@ -11,6 +11,9 @@
     <string name="enable_game_mode">打开游戏模式</string>
     <string name="disable_game_mode">关闭游戏模式</string>
     <string name="auto_game_mode">连接时自动开启游戏模式</string>
+    <string name="game_mode_implementation">游戏模式实现方式</string>
+    <string name="game_mode_implementation_standard">标准</string>
+    <string name="game_mode_implementation_compatible">兼容</string>
     <string name="open_heytap">点击更多时打开欢律</string>
     <string name="open_heytap_summary">点击弹窗的更多按钮时跳转至欢律而非打开主页面</string>
     <string name="off">关闭</string>

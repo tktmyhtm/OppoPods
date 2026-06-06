@@ -48,6 +48,7 @@ import androidx.navigation3.ui.NavDisplay
 import moe.chenxy.oppopods.MainActivity
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.pods.AppRfcommController
+import moe.chenxy.oppopods.pods.GameModeImplementation
 import moe.chenxy.oppopods.pods.NoiseControlMode
 import moe.chenxy.oppopods.pods.RfcommConnectionMethod
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
@@ -98,6 +99,13 @@ fun MainUI(
         mutableStateOf(
             RfcommConnectionMethod.fromPreference(
                 prefs.getString(RfcommConnectionMethod.PREF_KEY, null)
+            )
+        )
+    }
+    val gameModeImplementation = remember {
+        mutableStateOf(
+            GameModeImplementation.fromPreference(
+                prefs.getString(GameModeImplementation.PREF_KEY, null)
             )
         )
     }
@@ -232,7 +240,8 @@ fun MainUI(
         appController.connect(
             device = device,
             autoGameMode = autoGameMode.value,
-            connectionMethod = rfcommConnectionMethod.value
+            connectionMethod = rfcommConnectionMethod.value,
+            gameModeImplementation = gameModeImplementation.value
         )
     }
 
@@ -396,6 +405,20 @@ fun MainUI(
                         prefs.edit()
                             .putString(RfcommConnectionMethod.PREF_KEY, it.preferenceValue)
                             .apply()
+                    },
+                    gameModeImplementation = gameModeImplementation,
+                    onGameModeImplementationChange = {
+                        gameModeImplementation.value = it
+                        appController.setGameModeImplementation(it)
+                        prefs.edit()
+                            .putString(GameModeImplementation.PREF_KEY, it.preferenceValue)
+                            .apply()
+                        Intent(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED).apply {
+                            setPackage("com.android.bluetooth")
+                            putExtra(GameModeImplementation.PREF_KEY, it.preferenceValue)
+                            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                            context.sendBroadcast(this)
+                        }
                     },
                     showConnectionNotification = showConnectionNotification,
                     onShowConnectionNotificationChange = {

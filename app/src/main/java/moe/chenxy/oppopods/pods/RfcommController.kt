@@ -14,6 +14,7 @@ import android.media.AudioManager
 import android.media.MediaRoute2Info
 import android.media.MediaRouter2
 import android.media.RouteDiscoveryPreference
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +61,8 @@ object RfcommController {
     private var currentAnc: Int = 1
     private var currentGameMode: Boolean = false
     private var autoGameModeEnabled: Boolean = false
+    private var gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
+    private var lastGameModeStatusUpdateMs: Long = 0L
     // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
     private var adaptiveModeEnabled: Boolean = true
     private var showConnectionNotificationEnabled: Boolean = true
@@ -167,6 +170,12 @@ object RfcommController {
             OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED -> {
                 autoGameModeEnabled = intent.getBooleanExtra("enabled", autoGameModeEnabled)
                 Log.d(TAG, "Auto game mode synced: $autoGameModeEnabled")
+            }
+            OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED -> {
+                gameModeImplementation = GameModeImplementation.fromPreference(
+                    intent.getStringExtra(GameModeImplementation.PREF_KEY)
+                )
+                Log.d(TAG, "Game mode implementation synced: ${gameModeImplementation.preferenceValue}")
             }
             OppoPodsAction.ACTION_CYCLE_ANC -> {
                 cycleAnc()
@@ -307,6 +316,9 @@ object RfcommController {
         // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
         adaptiveModeEnabled = mPrefs.getBoolean("adaptive_mode", true)
         autoGameModeEnabled = mPrefs.getBoolean("auto_game_mode", false)
+        gameModeImplementation = GameModeImplementation.fromPreference(
+            mPrefs.getString(GameModeImplementation.PREF_KEY, null)
+        )
         showConnectionNotificationEnabled =
             mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
         notificationIslandStyleEnabled =
@@ -320,6 +332,7 @@ object RfcommController {
             "Notification settings initial: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
         )
         Log.d(TAG, "Auto game mode initial: $autoGameModeEnabled")
+        Log.d(TAG, "Game mode implementation initial: ${gameModeImplementation.preferenceValue}")
         Log.d(TAG, "RFCOMM connection method initial: ${rfcommConnectionMethod.preferenceValue}")
 
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
@@ -328,6 +341,7 @@ object RfcommController {
             this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
             this.addAction(OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED)
+            this.addAction(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED)
             this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
             this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
             this.addAction(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED)
@@ -469,11 +483,18 @@ object RfcommController {
         }
 
         // Try parse as batch query response for game mode (Cmd=0x810D)
-        val gameModeResult = GameModeParser.parse(packet)
+        val gameModeResult = GameModeParser.parse(packet, gameModeImplementation)
         if (gameModeResult != null) {
             Log.d(TAG, "Game mode received: $gameModeResult")
+            lastGameModeStatusUpdateMs = SystemClock.elapsedRealtime()
             currentGameMode = gameModeResult
             changeUIGameModeStatus(gameModeResult)
+            return
+        }
+
+        val setFeatureResult = SwitchFeatureSetParser.parse(packet)
+        if (setFeatureResult != null) {
+            Log.d(TAG, "Switch feature response: status=${setFeatureResult.status}, value=${setFeatureResult.value}")
             return
         }
 
@@ -521,9 +542,8 @@ object RfcommController {
     fun setGameMode(enabled: Boolean) {
         Log.d(TAG, "setGameMode: $enabled")
         currentGameMode = enabled
-        val packet = if (enabled) Enums.GAME_MODE_ON else Enums.GAME_MODE_OFF
         CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(packet)
+            sendGameModePackets(enabled)
         }
     }
 
@@ -560,28 +580,32 @@ object RfcommController {
     }
 
     private suspend fun enableGameModeOnConnect() {
-        // Keep the hook path aligned with the standalone RFCOMM flow: wait for the
-        // first query responses, send, verify, and retry once if the earbuds report off.
         delay(500)
-        if (!isConnected || mContext == null) return
-        Log.d(TAG, "Auto game mode: enabling after connect")
-        currentGameMode = true
-        changeUIGameModeStatus(true)
-        sendPacketSafe(Enums.GAME_MODE_ON)
+        repeat(3) { attempt ->
+            if (!isConnected || mContext == null) return
 
-        delay(300)
-        if (!isConnected) return
-        sendPacketSafe(Enums.QUERY_STATUS)
-
-        delay(500)
-        if (!isConnected || mContext == null) return
-        if (!currentGameMode) {
-            Log.d(TAG, "Auto game mode: first attempt didn't take, retrying")
+            val attemptStartedMs = SystemClock.elapsedRealtime()
+            Log.d(TAG, "Auto game mode: enabling after connect, attempt=${attempt + 1}, implementation=$gameModeImplementation")
             currentGameMode = true
             changeUIGameModeStatus(true)
-            sendPacketSafe(Enums.GAME_MODE_ON)
+            sendGameModePackets(true)
+
             delay(300)
+            if (!isConnected) return
             sendPacketSafe(Enums.QUERY_STATUS)
+
+            delay(if (attempt == 0) 700 else 1_500)
+            if (lastGameModeStatusUpdateMs >= attemptStartedMs && currentGameMode) {
+                return
+            }
+            Log.d(TAG, "Auto game mode: attempt ${attempt + 1} did not verify, retrying")
+        }
+    }
+
+    private suspend fun sendGameModePackets(enabled: Boolean) {
+        Enums.gameModePackets(enabled, gameModeImplementation).forEachIndexed { index, packet ->
+            if (index > 0) delay(120)
+            sendPacketSafe(packet)
         }
     }
 

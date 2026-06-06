@@ -115,9 +115,9 @@ OppoPods 当前已经使用或解析的命令：
 | 降噪查询 | `0x010C` | payload `01 01` |
 | 降噪响应 | `0x810C` | payload 内扫描 `01 01 <val1> <val2>` |
 | 主动上报 | `0x0204` | battery/ANC/button 等事件复用 |
-| 批量状态查询 | `0x010D` | 目前用于查询 game mode |
-| 批量状态响应 | `0x810D` | 找 key `0x28` 读取 game mode |
-| 设置游戏模式 | `0x0403` | `28 01` 开，`28 00` 关 |
+| 批量状态查询 | `0x010D` | 查询 feature switch，payload 为数量 + feature id 列表 |
+| 批量状态响应 | `0x810D` | `0x28` 是游戏模式主开关，`0x06` 是低延迟游戏模式 |
+| 设置游戏模式 | `0x0403` | 标准模式只发 `28 01/00`；兼容模式开启发 `28 01` + `06 01`，关闭发 `06 00` + `28 00` |
 | 设置 ANC | `0x0404` | `01 01 <mode>` |
 
 ## OppoPods 当前落地
@@ -154,4 +154,4 @@ adb logcat -s OppoPods-RfcommController OppoPods-AppRfcomm
 - UUID 经 SDP 最终解析出的实际 RFCOMM channel 需要 HCI snoop 或反射读取 `BluetoothSocket` 内部字段确认。
 - 欢律 packet 内层和 OppoPods 当前 `AA` 外层之间的拆包/封包位置还可以继续深挖，尤其是 read loop 中对原始流的切包逻辑。
 - `0x0204` 主动上报复用了多种事件，当前只处理了电量和 ANC，按钮事件还可以继续解析。
-- `0x010D/0x810D` 的 key-value payload 还有更多 feature key，`0x28` 只是当前 game mode 相关的一项。
+- `0x010D/0x810D` 的 key-value payload 还有更多 feature key；游戏模式相关至少包括主开关 `0x28` 和低延迟 `0x06`。

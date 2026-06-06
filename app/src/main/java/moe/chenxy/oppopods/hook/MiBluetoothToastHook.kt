@@ -41,6 +41,22 @@ object MiBluetoothToastHook : HookContext() {
         var lastNotificationDevice: BluetoothDevice? = null
         var lastNotificationBatteryParams: BatteryParams? = null
 
+        fun notificationTag(address: String, island: Boolean): String {
+            return if (island) "BTHeadsetIsland$address" else "BTHeadset$address"
+        }
+
+        fun notificationChannelId(address: String, island: Boolean): String {
+            return if (island) "BTHeadsetIsland$address" else "BTHeadset$address"
+        }
+
+        fun cancelNotificationByTag(notificationManager: NotificationManager, tag: String) {
+            notificationManager.cancelAsUser(
+                tag,
+                10003,
+                SystemApisUtils.getUserAllUserHandle()
+            )
+        }
+
         fun shouldShowConnectionNotification(intent: Intent? = null): Boolean {
             return if (intent != null && !hasRuntimeNotificationSettings) {
                 intent.getBooleanExtra(
@@ -128,16 +144,13 @@ object MiBluetoothToastHook : HookContext() {
 
                 val contentText: String = caseBattStr + leftEar + rightEar
                 val notificationManager = context.getSystemService("notification") as NotificationManager
-                if (!showNotificationAsIsland && notificationIslandState[address] == true) {
-                    notificationManager.cancelAsUser(
-                        "BTHeadset$address",
-                        10003,
-                        SystemApisUtils.getUserAllUserHandle()
-                    )
-                }
+                val activeNotificationTag = notificationTag(address, showNotificationAsIsland)
+                val inactiveNotificationTag = notificationTag(address, !showNotificationAsIsland)
+                val channelId = notificationChannelId(address, showNotificationAsIsland)
+                cancelNotificationByTag(notificationManager, inactiveNotificationTag)
                 notificationManager.createNotificationChannel(
                     NotificationChannel(
-                        "BTHeadset$address",
+                        channelId,
                         alias,
                         NotificationManager.IMPORTANCE_DEFAULT
                     ).apply {
@@ -257,9 +270,9 @@ object MiBluetoothToastHook : HookContext() {
                     } catch (_: Exception) {}
                 }
                 notificationManager.notifyAsUser(
-                    "BTHeadset$address",
+                    activeNotificationTag,
                     10003,
-                    Notification.Builder(context, "BTHeadset$address")
+                    Notification.Builder(context, channelId)
                         .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                         .setWhen(0L)
                         .setTicker(alias)
@@ -288,7 +301,8 @@ object MiBluetoothToastHook : HookContext() {
                 val address = bluetoothDevice.address
                 if (address.isNotEmpty()) {
                     val notificationManager = context.getSystemService("notification") as NotificationManager
-                    notificationManager.cancelAsUser("BTHeadset$address", 10003, SystemApisUtils.getUserAllUserHandle())
+                    cancelNotificationByTag(notificationManager, notificationTag(address, false))
+                    cancelNotificationByTag(notificationManager, notificationTag(address, true))
                     notificationIslandState.remove(address)
                     lastNotificationDevice = null
                     lastNotificationBatteryParams = null

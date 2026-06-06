@@ -3,6 +3,7 @@ package moe.chenxy.oppopods.pods
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +36,8 @@ class AppRfcommController {
 
     private var socket: BluetoothSocket? = null
     private var isConnected = false
+    private var gameModeImplementation = GameModeImplementation.STANDARD
+    private var lastGameModeStatusUpdateMs = 0L
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var batteryPollJob: Job? = null
 
@@ -56,10 +59,12 @@ class AppRfcommController {
     fun connect(
         device: BluetoothDevice,
         autoGameMode: Boolean = false,
-        connectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID
+        connectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID,
+        gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
     ) {
         if (_connectionState.value == ConnectionState.CONNECTING) return
 
+        this.gameModeImplementation = gameModeImplementation
         _deviceName.value = device.name ?: device.address
         _connectionState.value = ConnectionState.CONNECTING
 
@@ -77,20 +82,7 @@ class AppRfcommController {
                 queryStatus()
 
                 if (autoGameMode) {
-                    // Wait for initial query responses to settle
-                    delay(500)
-                    sendPacket(Enums.GAME_MODE_ON)
-                    _gameMode.value = true
-                    // Query to verify game mode took effect
-                    delay(300)
-                    sendPacket(Enums.QUERY_STATUS)
-                    // If earbuds report game mode still off, retry
-                    delay(500)
-                    if (!_gameMode.value) {
-                        Log.d(TAG, "Auto game mode: first attempt didn't take, retrying")
-                        sendPacket(Enums.GAME_MODE_ON)
-                        _gameMode.value = true
-                    }
+                    enableGameModeOnConnect()
                 }
             } catch (e: IOException) {
                 Log.e(TAG, "RFCOMM connect failed", e)
@@ -190,10 +182,17 @@ class AppRfcommController {
         }
 
         // Try parse as batch query response for game mode (Cmd=0x810D)
-        val gameModeResult = GameModeParser.parse(packet)
+        val gameModeResult = GameModeParser.parse(packet, gameModeImplementation)
         if (gameModeResult != null) {
             Log.d(TAG, "Game mode received: $gameModeResult")
+            lastGameModeStatusUpdateMs = SystemClock.elapsedRealtime()
             _gameMode.value = gameModeResult
+            return
+        }
+
+        val setFeatureResult = SwitchFeatureSetParser.parse(packet)
+        if (setFeatureResult != null) {
+            Log.d(TAG, "Switch feature response: status=${setFeatureResult.status}, value=${setFeatureResult.value}")
             return
         }
     }
@@ -209,8 +208,11 @@ class AppRfcommController {
 
     fun setGameMode(enabled: Boolean) {
         _gameMode.value = enabled
-        val packet = if (enabled) Enums.GAME_MODE_ON else Enums.GAME_MODE_OFF
-        scope.launch { sendPacket(packet) }
+        scope.launch { sendGameModePackets(enabled) }
+    }
+
+    fun setGameModeImplementation(implementation: GameModeImplementation) {
+        gameModeImplementation = implementation
     }
 
     fun setANCMode(mode: NoiseControlMode) {
@@ -234,6 +236,35 @@ class AppRfcommController {
             sendPacket(Enums.QUERY_BATTERY)
             delay(50)
             sendPacket(Enums.QUERY_ANC)
+        }
+    }
+
+    private suspend fun enableGameModeOnConnect() {
+        delay(500)
+        repeat(3) { attempt ->
+            if (!isConnected) return
+
+            val attemptStartedMs = SystemClock.elapsedRealtime()
+            Log.d(TAG, "Auto game mode: enabling after connect, attempt=${attempt + 1}, implementation=$gameModeImplementation")
+            _gameMode.value = true
+            sendGameModePackets(true)
+
+            delay(300)
+            if (!isConnected) return
+            sendPacket(Enums.QUERY_STATUS)
+
+            delay(if (attempt == 0) 700 else 1_500)
+            if (lastGameModeStatusUpdateMs >= attemptStartedMs && _gameMode.value) {
+                return
+            }
+            Log.d(TAG, "Auto game mode: attempt ${attempt + 1} did not verify, retrying")
+        }
+    }
+
+    private suspend fun sendGameModePackets(enabled: Boolean) {
+        Enums.gameModePackets(enabled, gameModeImplementation).forEachIndexed { index, packet ->
+            if (index > 0) delay(120)
+            sendPacket(packet)
         }
     }
 

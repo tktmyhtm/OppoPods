@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.chenxy.oppopods.R
+import moe.chenxy.oppopods.pods.GameModeImplementation
 import moe.chenxy.oppopods.pods.RfcommConnectionMethod
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -39,6 +40,8 @@ fun SettingsPage(
     onAdaptiveModeChange: (Boolean) -> Unit = {},
     rfcommConnectionMethod: MutableState<RfcommConnectionMethod> = mutableStateOf(RfcommConnectionMethod.UUID),
     onRfcommConnectionMethodChange: (RfcommConnectionMethod) -> Unit = {},
+    gameModeImplementation: MutableState<GameModeImplementation> = mutableStateOf(GameModeImplementation.STANDARD),
+    onGameModeImplementationChange: (GameModeImplementation) -> Unit = {},
     showConnectionNotification: MutableState<Boolean> = mutableStateOf(true),
     onShowConnectionNotificationChange: (Boolean) -> Unit = {},
     notificationIslandStyle: MutableState<Boolean> = mutableStateOf(true),
@@ -54,6 +57,10 @@ fun SettingsPage(
     val rfcommConnectionOptions = listOf(
         stringResource(R.string.rfcomm_connection_method_uuid),
         stringResource(R.string.rfcomm_connection_method_channel)
+    )
+    val gameModeImplementationOptions = listOf(
+        stringResource(R.string.game_mode_implementation_standard),
+        stringResource(R.string.game_mode_implementation_compatible)
     )
 
     LazyColumn(
@@ -97,6 +104,14 @@ fun SettingsPage(
                     title = stringResource(R.string.auto_game_mode),
                     checked = autoGameMode.value,
                     onCheckedChange = { onAutoGameModeChange(it) }
+                )
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.game_mode_implementation),
+                    items = gameModeImplementationOptions,
+                    selectedIndex = GameModeImplementation.selectedIndexOf(gameModeImplementation.value),
+                    onSelectedIndexChange = {
+                        onGameModeImplementationChange(GameModeImplementation.fromSelectedIndex(it))
+                    }
                 )
                 SwitchPreference(
                     title = stringResource(R.string.show_connection_notification),
