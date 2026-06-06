@@ -241,7 +241,12 @@ object RfcommController {
         currentBatteryParams = batteryParams
 
         if (shouldShowToast) {
-            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
+            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
+                mContext!!,
+                batteryParams,
+                showConnectionNotificationEnabled,
+                notificationIslandStyleEnabled
+            )
             mShowedConnectedToast = true
         }
         if (showConnectionNotificationEnabled) {
