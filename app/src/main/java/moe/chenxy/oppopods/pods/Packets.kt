@@ -34,11 +34,13 @@ object AncMode {
     const val OFF = 0x01
     const val NOISE_CANCELLATION = 0x02
     const val TRANSPARENCY = 0x04
+    const val ADAPTIVE_HIGH = 0x00
+    const val ADAPTIVE_LOW = 0x08
 }
 
-/** Noise control mode enum for UI. OPPO has 3 modes (no Adaptive). */
+/** Noise control mode enum for UI. */
 enum class NoiseControlMode {
-    OFF, NOISE_CANCELLATION, TRANSPARENCY
+    OFF, NOISE_CANCELLATION, ADAPTIVE, TRANSPARENCY
 }
 
 /** Battery component index in response payload. */
@@ -85,6 +87,11 @@ object Enums {
     /** Switch to Off: AA 0A 00 00 04 04 00 03 00 01 01 01 */
     val ANC_OFF: ByteArray = OppoPackets.buildPacket(
         cmd = Cmd.SET_ANC, payload = byteArrayOf(0x01, 0x01, AncMode.OFF.toByte())
+    )
+
+    /** Switch to Adaptive: AA 0B 00 00 04 04 00 04 00 01 01 00 08 */
+    val ANC_ADAPTIVE: ByteArray = OppoPackets.buildPacket(
+        cmd = Cmd.SET_ANC, payload = byteArrayOf(0x01, 0x01, AncMode.ADAPTIVE_HIGH.toByte(), AncMode.ADAPTIVE_LOW.toByte())
     )
 
     /** Query battery: AA 07 00 00 06 01 F0 00 00 */
@@ -242,8 +249,8 @@ object BatteryParser {
  * Parser for OPPO earphone ANC mode response/notification packets.
  *
  * Cmd: 0x810C (mode query response) or 0x0204 (mode change notification)
- * Scan payload for consecutive bytes 01 01 [Val]
- * Val mapping: 0x10=NC, 0x00=Transparency, 0x08=Off
+ * Scan payload for consecutive bytes 01 01 [Val1] [Val2]
+ * Val mapping: 0x10 0x00=NC, 0x00 0x01=Transparency, 0x08 0x00=Off, 0x00 0x08=Adaptive
  */
 object AncModeParser {
 
@@ -268,13 +275,17 @@ object AncModeParser {
             if (reportType == 0x01 || reportType == 0x02) return null
         }
 
-        // Scan for pattern: 01 01 [Val]
-        for (i in payloadStart until minOf(payloadStart + payLen - 2, data.size - 2)) {
+        // Scan for pattern: 01 01 [Val1] [Val2]
+        for (i in payloadStart until minOf(payloadStart + payLen - 3, data.size - 3)) {
             if (data[i] == 0x01.toByte() && data[i + 1] == 0x01.toByte()) {
-                return when (data[i + 2].toInt() and 0xFF) {
-                    0x10 -> NoiseControlMode.NOISE_CANCELLATION
-                    0x00 -> NoiseControlMode.TRANSPARENCY
-                    0x08 -> NoiseControlMode.OFF
+                val val1 = data[i + 2].toInt() and 0xFF
+                val val2 = data[i + 3].toInt() and 0xFF
+
+                return when {
+                    val1 == 0x10 && val2 == 0x00 -> NoiseControlMode.NOISE_CANCELLATION
+                    val1 == 0x00 && val2 == 0x01 -> NoiseControlMode.TRANSPARENCY
+                    val1 == 0x08 && val2 == 0x00 -> NoiseControlMode.OFF
+                    val1 == 0x00 && val2 == 0x08 -> NoiseControlMode.ADAPTIVE
                     else -> null
                 }
             }

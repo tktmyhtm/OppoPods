@@ -49,7 +49,7 @@
         <!-- The minimum Xposed version number -->
         <meta-data
             android:name="xposedminversion"
-            android:value="93" />
+            android:value="101" />
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposedscope" />

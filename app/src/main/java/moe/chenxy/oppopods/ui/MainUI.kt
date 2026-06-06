@@ -51,6 +51,7 @@ import moe.chenxy.oppopods.pods.AppRfcommController
 import moe.chenxy.oppopods.pods.NoiseControlMode
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
@@ -90,6 +91,14 @@ fun MainUI(
     val prefs = remember { context.getSharedPreferences("oppopods_settings", Context.MODE_PRIVATE) }
     val autoGameMode = remember { mutableStateOf(prefs.getBoolean("auto_game_mode", false)) }
     val openHeyTap = remember { mutableStateOf(prefs.getBoolean("open_heytap", false)) }
+    // Adaptive模式偏好设置（持久化存储），默认开启
+    val adaptiveMode = remember { mutableStateOf(prefs.getBoolean("adaptive_mode", true)) }
+    val showConnectionNotification = remember {
+        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true))
+    }
+    val notificationIslandStyle = remember {
+        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true))
+    }
 
     val appController = remember { AppRfcommController() }
     val appConnState by appController.connectionState.collectAsState()
@@ -129,6 +138,7 @@ fun MainUI(
                             1 -> NoiseControlMode.OFF
                             2 -> NoiseControlMode.NOISE_CANCELLATION
                             3 -> NoiseControlMode.TRANSPARENCY
+                            4 -> NoiseControlMode.ADAPTIVE
                             else -> NoiseControlMode.OFF
                         }
                     }
@@ -185,6 +195,7 @@ fun MainUI(
             NoiseControlMode.OFF -> 1
             NoiseControlMode.NOISE_CANCELLATION -> 2
             NoiseControlMode.TRANSPARENCY -> 3
+            NoiseControlMode.ADAPTIVE -> 4
         }
         Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
             this.putExtra("status", status)
@@ -213,6 +224,21 @@ fun MainUI(
             appController.refreshStatus()
         } else if (hookConnected.value) {
             context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS))
+        }
+    }
+
+    fun broadcastNotificationSettings(
+        showConnectionNotificationEnabled: Boolean,
+        notificationIslandStyleEnabled: Boolean
+    ) {
+        listOf("com.android.bluetooth", "com.xiaomi.bluetooth").forEach { targetPackage ->
+            Intent(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED).apply {
+                setPackage(targetPackage)
+                putExtra(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, showConnectionNotificationEnabled)
+                putExtra(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, notificationIslandStyleEnabled)
+                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                context.sendBroadcast(this)
+            }
         }
     }
 
@@ -278,7 +304,8 @@ fun MainUI(
                             ancMode = displayAnc,
                             onAncModeChange = { setAncMode(it) },
                             gameMode = displayGameMode,
-                            onGameModeChange = { setGameMode(it) }
+                            onGameModeChange = { setGameMode(it) },
+                            adaptiveModeEnabled = adaptiveMode.value
                         )
                         "connecting" -> Box(Modifier.padding(padding).fillMaxSize()) { ConnectingPage() }
                         "error" -> Box(Modifier.padding(padding).fillMaxSize()) { ErrorPage(onRetry = { appController.disconnect() }) }
@@ -325,6 +352,36 @@ fun MainUI(
                     onOpenHeyTapChange = {
                         openHeyTap.value = it
                         prefs.edit().putBoolean("open_heytap", it).apply()
+                    },
+                    adaptiveMode = adaptiveMode,
+                    onAdaptiveModeChange = {
+                        adaptiveMode.value = it
+                        prefs.edit().putBoolean("adaptive_mode", it).apply()
+                        // 广播 Adaptive 模式状态变更到蓝牙进程，确保跨进程实时同步
+                        Intent(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED).apply {
+                            putExtra("enabled", it)
+                            context.sendBroadcast(this)
+                        }
+                        // 关闭Adaptive模式时，若当前处于Adaptive模式则自动切换至降噪模式
+                        if (!it && displayAnc == NoiseControlMode.ADAPTIVE) {
+                            setAncMode(NoiseControlMode.NOISE_CANCELLATION)
+                        }
+                    },
+                    showConnectionNotification = showConnectionNotification,
+                    onShowConnectionNotificationChange = {
+                        showConnectionNotification.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, it)
+                            .apply()
+                        broadcastNotificationSettings(it, notificationIslandStyle.value)
+                    },
+                    notificationIslandStyle = notificationIslandStyle,
+                    onNotificationIslandStyleChange = {
+                        notificationIslandStyle.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, it)
+                            .apply()
+                        broadcastNotificationSettings(showConnectionNotification.value, it)
                     }
                 )
             }

@@ -29,7 +29,8 @@ fun PodDetailPage(
     ancMode: NoiseControlMode,
     onAncModeChange: (NoiseControlMode) -> Unit,
     gameMode: Boolean = false,
-    onGameModeChange: (Boolean) -> Unit = {}
+    onGameModeChange: (Boolean) -> Unit = {},
+    adaptiveModeEnabled: Boolean = true
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -59,7 +60,7 @@ fun PodDetailPage(
             Card(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)
             ) {
-                AncSwitch(ancMode, onAncModeChange)
+                AncSwitch(ancMode, onAncModeChange, adaptiveModeEnabled = adaptiveModeEnabled)
             }
         }
 

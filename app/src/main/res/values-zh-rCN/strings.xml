@@ -16,6 +16,7 @@
     <string name="off">关闭</string>
     <string name="noise_cancellation_title">降噪</string>
     <string name="transparency_title">通透</string>
+    <string name="adaptive_title">自适应</string>
     <string name="pod_case">耳机盒</string>
     <string name="batt_left_pod">左</string>
     <string name="batt_right_pod">右</string>
@@ -41,4 +42,12 @@
     <string name="theme_follow_system">跟随系统</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
+    <string name="cycle_anc">切换降噪</string>
+    <string name="adaptive_mode">自适应模式</string>
+    <string name="adaptive_mode_summary">为兼容耳机启用自适应降噪模式，关闭后将隐藏该选项并禁用相关音频处理</string>
+    <string name="show_connection_notification">连接时显示通知</string>
+    <string name="show_connection_notification_summary">耳机连接后显示电量通知</string>
+    <string name="notification_island_style">将通知显示为超级岛样式</string>
+    <string name="notification_island_style_summary">使用 HyperOS 焦点通知/超级岛样式展示连接通知</string>
+    <string name="notification_btn_disconnect">断开连接</string>
 </resources>

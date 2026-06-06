@@ -15,8 +15,6 @@ import android.media.MediaRoute2Info
 import android.media.MediaRouter2
 import android.media.RouteDiscoveryPreference
 import android.util.Log
-import com.highcapable.yukihookapi.hook.xposed.prefs.YukiHookPrefsBridge
-import de.robv.android.xposed.XposedHelpers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -33,6 +31,7 @@ import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 import java.io.IOException
 import java.io.InputStream
+import android.content.SharedPreferences
 import java.util.concurrent.Executor
 
 @SuppressLint("MissingPermission", "StaticFieldLeak")
@@ -48,7 +47,7 @@ object RfcommController {
     private val audioManager: AudioManager? by lazy {
         mContext?.getSystemService(AudioManager::class.java)
     }
-    private lateinit var mPrefsBridge: YukiHookPrefsBridge
+    private lateinit var mPrefs: SharedPreferences
 
     private var scanToken: MediaRouter2.ScanToken? = null
     var routes: List<MediaRoute2Info> = listOf()
@@ -61,6 +60,10 @@ object RfcommController {
     lateinit var currentBatteryParams: BatteryParams
     private var currentAnc: Int = 1
     private var currentGameMode: Boolean = false
+    // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
+    private var adaptiveModeEnabled: Boolean = true
+    private var showConnectionNotificationEnabled: Boolean = true
+    private var notificationIslandStyleEnabled: Boolean = true
     private var lastKnownCaseBattery: Int = 0
     private var lastKnownCaseCharging: Boolean = false
     private var cachedDeviceName: String = ""
@@ -70,36 +73,34 @@ object RfcommController {
 
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(p0: Context?, p1: Intent?) {
-            if (p1?.action == OppoPodsAction.ACTION_GET_PODS_MAC) {
-                Intent(OppoPodsAction.ACTION_PODS_MAC_RECEIVED).apply {
-                    Log.i(TAG, "${p1.action} ,mac ${mDevice.address}")
-                    this.`package` = "com.android.systemui"
-                    this.putExtra("mac", mDevice.address)
-                    this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                    p0?.sendBroadcast(this)
-                    return
-                }
-            }
             handleUIEvent(p1!!)
         }
     }
 
     private fun changeUIAncStatus(status: Int) {
-        if (status < 1 || status > 3) return
+        if (status < 1 || status > 4) return
         Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
             this.putExtra("status", status)
             this.`package` = BuildConfig.APPLICATION_ID
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             mContext!!.sendBroadcast(this)
         }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_ANC_CHANGED) {
+            putExtra("status", status)
+        }
     }
 
     private fun changeUIBatteryStatus(status: BatteryParams) {
         Intent(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED).apply {
             this.putExtra("status", status)
+            putBatteryExtras(status)
             this.`package` = BuildConfig.APPLICATION_ID
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             mContext!!.sendBroadcast(this)
+        }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED) {
+            putExtra("status", status)
+            putBatteryExtras(status)
         }
     }
 
@@ -110,6 +111,28 @@ object RfcommController {
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             mContext!!.sendBroadcast(this)
         }
+    }
+
+    private fun refreshPodsNotification() {
+        val context = mContext ?: return
+        if (!::mDevice.isInitialized) return
+
+        if (!showConnectionNotificationEnabled) {
+            cancelPodsNotificationByMiuiBt(context, mDevice)
+            return
+        }
+
+        if (!::currentBatteryParams.isInitialized) return
+        if (!notificationIslandStyleEnabled) {
+            cancelPodsNotificationByMiuiBt(context, mDevice)
+        }
+        MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
+            context,
+            currentBatteryParams,
+            mDevice,
+            showConnectionNotificationEnabled,
+            notificationIslandStyleEnabled
+        )
     }
 
     fun handleUIEvent(intent: Intent) {
@@ -126,6 +149,9 @@ object RfcommController {
                     this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                     mContext!!.sendBroadcast(this)
                 }
+                sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_CONNECTED) {
+                    putExtra("device_name", mDevice.name ?: cachedDeviceName)
+                }
             }
             OppoPodsAction.ACTION_ANC_SELECT -> {
                 val status = intent.getIntExtra("status", 0)
@@ -137,6 +163,33 @@ object RfcommController {
             OppoPodsAction.ACTION_GAME_MODE_SET -> {
                 val enabled = intent.getBooleanExtra("enabled", false)
                 setGameMode(enabled)
+            }
+            OppoPodsAction.ACTION_CYCLE_ANC -> {
+                cycleAnc()
+            }
+            OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED -> {
+                // 跨进程同步 Adaptive 模式开关状态，确保 cycleAnc() 使用实时值
+                adaptiveModeEnabled = intent.getBooleanExtra("enabled", true)
+                Log.d(TAG, "Adaptive mode synced: $adaptiveModeEnabled")
+                // 若关闭 Adaptive 且当前处于 Adaptive 模式，自动切换至降噪模式
+                if (!adaptiveModeEnabled && currentAnc == 4) {
+                    setANCMode(2)
+                }
+            }
+            OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED -> {
+                showConnectionNotificationEnabled = intent.getBooleanExtra(
+                    OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
+                    showConnectionNotificationEnabled
+                )
+                notificationIslandStyleEnabled = intent.getBooleanExtra(
+                    OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
+                    notificationIslandStyleEnabled
+                )
+                Log.d(
+                    TAG,
+                    "Notification settings synced: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+                )
+                refreshPodsNotification()
             }
         }
     }
@@ -192,7 +245,17 @@ object RfcommController {
             MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
             mShowedConnectedToast = true
         }
-        MiuiStrongToastUtil.showPodsNotificationByMiuiBt(mContext!!, batteryParams, mDevice)
+        if (showConnectionNotificationEnabled) {
+            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
+                mContext!!,
+                batteryParams,
+                mDevice,
+                showConnectionNotificationEnabled,
+                notificationIslandStyleEnabled
+            )
+        } else {
+            cancelPodsNotificationByMiuiBt(mContext!!, mDevice)
+        }
         changeUIBatteryStatus(batteryParams)
 
         lastTempBatt = if (left.isConnected && right.isConnected)
@@ -236,18 +299,31 @@ object RfcommController {
         return method.invoke(device, RFCOMM_CHANNEL) as BluetoothSocket
     }
 
-    fun connectPod(context: Context, device: BluetoothDevice, prefsBridge: YukiHookPrefsBridge) {
+    fun connectPod(context: Context, device: BluetoothDevice, prefs: SharedPreferences) {
         mContext = context
         mDevice = device
-        mPrefsBridge = prefsBridge
+        mPrefs = prefs
         cachedDeviceName = device.name ?: ""
+        // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
+        adaptiveModeEnabled = mPrefs.getBoolean("adaptive_mode", true)
+        showConnectionNotificationEnabled =
+            mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
+        notificationIslandStyleEnabled =
+            mPrefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
+        Log.d(TAG, "Adaptive mode initial: $adaptiveModeEnabled")
+        Log.d(
+            TAG,
+            "Notification settings initial: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+        )
 
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             this.addAction(OppoPodsAction.ACTION_ANC_SELECT)
             this.addAction(OppoPodsAction.ACTION_PODS_UI_INIT)
-            this.addAction(OppoPodsAction.ACTION_GET_PODS_MAC)
             this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
+            this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
+            this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
+            this.addAction(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED)
         }, Context.RECEIVER_EXPORTED)
 
         Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {
@@ -255,6 +331,9 @@ object RfcommController {
             this.`package` = BuildConfig.APPLICATION_ID
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             context.sendBroadcast(this)
+        }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_CONNECTED) {
+            putExtra("device_name", cachedDeviceName)
         }
 
         MediaControl.mContext = mContext
@@ -279,9 +358,8 @@ object RfcommController {
                 queryStatus()
 
                 // Auto-enable game mode if preference is set.
-                // Read via YukiHookPrefsBridge since we're in com.android.bluetooth's
-                // process — context.getSharedPreferences would read the wrong file.
-                if (mPrefsBridge.name("oppopods_settings").getBoolean("auto_game_mode", false)) {
+                // Read remote module preferences since this runs in com.android.bluetooth.
+                if (mPrefs.getBoolean("auto_game_mode", false)) {
                     delay(100)
                     sendPacketSafe(Enums.GAME_MODE_ON)
                 }
@@ -302,6 +380,34 @@ object RfcommController {
                 }
             }
         }
+    }
+
+    private fun sendExternalPodsStatusBroadcast(action: String, fill: Intent.() -> Unit = {}) {
+        val ctx = mContext ?: return
+        listOf("com.milink.service", "com.xiaomi.bluetooth", "com.android.settings").forEach { targetPackage ->
+            Intent(action).apply {
+                if (::mDevice.isInitialized) {
+                    putExtra("address", mDevice.address)
+                    putExtra("device_name", mDevice.name ?: cachedDeviceName)
+                }
+                fill()
+                setPackage(targetPackage)
+                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                ctx.sendBroadcast(this)
+            }
+        }
+    }
+
+    private fun Intent.putBatteryExtras(status: BatteryParams) {
+        putExtra("left_battery", status.left?.battery ?: 0)
+        putExtra("left_charging", status.left?.isCharging == true)
+        putExtra("left_connected", status.left?.isConnected == true)
+        putExtra("right_battery", status.right?.battery ?: 0)
+        putExtra("right_charging", status.right?.isCharging == true)
+        putExtra("right_connected", status.right?.isConnected == true)
+        putExtra("case_battery", status.case?.battery ?: 0)
+        putExtra("case_charging", status.case?.isCharging == true)
+        putExtra("case_connected", status.case?.isConnected == true)
     }
 
     private fun startPacketReader(inputStream: InputStream) {
@@ -354,6 +460,7 @@ object RfcommController {
                 NoiseControlMode.OFF -> 1
                 NoiseControlMode.NOISE_CANCELLATION -> 2
                 NoiseControlMode.TRANSPARENCY -> 3
+                NoiseControlMode.ADAPTIVE -> 4
             }
             changeUIAncStatus(currentAnc)
             return
@@ -418,12 +525,25 @@ object RfcommController {
         }
     }
 
+    fun cycleAnc() {
+        // 使用广播同步的缓存值，避免 SharedPreferences 跨进程缓存导致读取过时值
+        val next = when (currentAnc) {
+            2 -> if (adaptiveModeEnabled) 4 else 3  // NC → Adaptive（若启用）或 Transparency
+            4 -> 3  // Adaptive → Transparency
+            3 -> 1  // Transparency → OFF
+            else -> 2  // OFF or unknown → NC
+        }
+        setANCMode(next)
+    }
+
     fun setANCMode(mode: Int) {
         Log.d(TAG, "setANCMode: $mode")
+        currentAnc = mode  // 乐观更新，与 AppRfcommController 保持一致
         val packet = when (mode) {
             1 -> Enums.ANC_OFF
             2 -> Enums.ANC_NOISE_CANCEL
             3 -> Enums.ANC_TRANSPARENCY
+            4 -> Enums.ANC_ADAPTIVE
             else -> return
         }
         CoroutineScope(Dispatchers.IO).launch {
@@ -517,10 +637,35 @@ object RfcommController {
 
     fun setRegularBatteryLevel(level: Int) {
         try {
-            val service = XposedHelpers.getObjectField(mContext, "mAdapterService")
-            XposedHelpers.callMethod(service, "setBatteryLevel", mDevice, level, false)
+            val service = getObjectField(mContext, "mAdapterService")
+            callMethod(service, "setBatteryLevel", mDevice, level, false)
         } catch (e: Exception) {
             Log.e(TAG, "setRegularBatteryLevel failed", e)
         }
+    }
+
+    private fun getObjectField(instance: Any?, fieldName: String): Any? {
+        if (instance == null) return null
+        var cls: Class<*>? = instance.javaClass
+        while (cls != null) {
+            runCatching {
+                return cls.getDeclaredField(fieldName).apply { isAccessible = true }.get(instance)
+            }
+            cls = cls.superclass
+        }
+        throw NoSuchFieldException(fieldName)
+    }
+
+    private fun callMethod(instance: Any?, methodName: String, vararg args: Any?): Any? {
+        if (instance == null) return null
+        var cls: Class<*>? = instance.javaClass
+        while (cls != null) {
+            cls.declaredMethods.firstOrNull { it.name == methodName && it.parameterTypes.size == args.size }?.let {
+                it.isAccessible = true
+                return it.invoke(instance, *args)
+            }
+            cls = cls.superclass
+        }
+        throw NoSuchMethodException(methodName)
     }
 }

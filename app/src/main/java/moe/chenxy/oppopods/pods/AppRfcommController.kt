@@ -20,7 +20,7 @@ import java.io.InputStream
 
 /**
  * Standalone RFCOMM controller for direct use from the app process.
- * Does not depend on Xposed / YukiHookAPI.
+ * Does not depend on the hook runtime.
  */
 @SuppressLint("MissingPermission")
 class AppRfcommController {
@@ -221,6 +221,7 @@ class AppRfcommController {
         val packet = when (mode) {
             NoiseControlMode.OFF -> Enums.ANC_OFF
             NoiseControlMode.NOISE_CANCELLATION -> Enums.ANC_NOISE_CANCEL
+            NoiseControlMode.ADAPTIVE -> Enums.ANC_ADAPTIVE
             NoiseControlMode.TRANSPARENCY -> Enums.ANC_TRANSPARENCY
         }
         _ancMode.value = mode

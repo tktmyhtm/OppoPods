@@ -7,13 +7,12 @@ import android.app.NotificationManager
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.xzakota.hyper.notification.focus.FocusNotification
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
-import org.json.JSONObject
 
 @SuppressLint("WrongConstant")
 object FocusIslandUtil {
@@ -52,35 +51,69 @@ object FocusIslandUtil {
             val leftIcon = Icon.createWithBitmap(leftBitmap)
             val rightIcon = Icon.createWithBitmap(rightBitmap)
 
-            val json = buildIslandJson(leftText, rightText)
-
-            val picsBundle = Bundle().apply {
-                putParcelable("miui.focus.pic_left", leftIcon)
-                putParcelable("miui.focus.pic_right", rightIcon)
-            }
-
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT
-                ).apply {
+                NotificationChannel(CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_DEFAULT).apply {
                     setSound(null, null)
                     enableVibration(false)
+                    setAllowBubbles(true)
                 }
             )
 
             val contentParts = mutableListOf<String>()
             if (leftConnected) contentParts.add("L: ${batteryParams.left!!.battery}%")
             if (rightConnected) contentParts.add("R: ${batteryParams.right!!.battery}%")
+            val contentText = contentParts.joinToString("  ")
+
+            val extras = FocusNotification.buildV3 {
+                val picLeft = createPicture("key_pic_left", leftIcon)
+                val picRight = createPicture("key_pic_right", rightIcon)
+
+                enableFloat = true
+                ticker = "OppoPods"
+                tickerPic = picLeft
+
+                isShowNotification = false
+                island {
+                    islandProperty = 1
+                    bigIslandArea {
+                        imageTextInfoLeft {
+                            type = 1
+                            picInfo {
+                                type = 1
+                                pic = picLeft
+                            }
+                            textInfo {
+                                title = leftText
+                                content = "%"
+                            }
+                        }
+                        imageTextInfoRight {
+                            type = 2
+                            picInfo {
+                                type = 1
+                                pic = picRight
+                            }
+                            textInfo {
+                                title = rightText
+                                content = "%"
+                            }
+                        }
+                    }
+                    shareData {
+                        title = "OppoPods"
+                        content = contentText
+                        shareContent = contentText
+                    }
+                }
+            } ?: return false
 
             val notification = Notification.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .setContentTitle("OppoPods")
-                .setContentText(contentParts.joinToString("  "))
-                .addExtras(Bundle().apply {
-                    putString("miui.focus.param", json)
-                    putBundle("miui.focus.pics", picsBundle)
-                })
+                .setContentText(contentText)
+                .setTicker("OppoPods")
+                .addExtras(extras)
                 .build()
 
             nm.notify(NOTIFICATION_ID, notification)
@@ -95,45 +128,5 @@ object FocusIslandUtil {
             Log.e(TAG, "Failed to show Focus Island", e)
             return false
         }
-    }
-
-    private fun buildIslandJson(leftText: String, rightText: String): String {
-        return JSONObject().apply {
-            put("param_v2", JSONObject().apply {
-                put("protocol", 3)
-                put("enableFloat", true)
-                put("updatable", true)
-                put("ticker", "OppoPods")
-                put("isShowNotification", false)
-                put("param_island", JSONObject().apply {
-                    put("islandProperty", 1)
-                    put("islandTimeout", ISLAND_TIMEOUT_SECONDS)
-                    put("bigIslandArea", JSONObject().apply {
-                        put("imageTextInfoLeft", JSONObject().apply {
-                            put("type", 1)
-                            put("picInfo", JSONObject().apply {
-                                put("type", 1)
-                                put("pic", "miui.focus.pic_left")
-                            })
-                            put("textInfo", JSONObject().apply {
-                                put("title", leftText)
-                                put("content", "%")
-                            })
-                        })
-                        put("imageTextInfoRight", JSONObject().apply {
-                            put("type", 2)
-                            put("picInfo", JSONObject().apply {
-                                put("type", 1)
-                                put("pic", "miui.focus.pic_right")
-                            })
-                            put("textInfo", JSONObject().apply {
-                                put("title", rightText)
-                                put("content", "%")
-                            })
-                        })
-                    })
-                })
-            })
-        }.toString()
     }
 }

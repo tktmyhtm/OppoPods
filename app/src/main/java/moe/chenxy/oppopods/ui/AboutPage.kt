@@ -33,7 +33,13 @@ fun SettingsPage(
     autoGameMode: MutableState<Boolean> = mutableStateOf(false),
     onAutoGameModeChange: (Boolean) -> Unit = {},
     openHeyTap: MutableState<Boolean> = mutableStateOf(false),
-    onOpenHeyTapChange: (Boolean) -> Unit = {}
+    onOpenHeyTapChange: (Boolean) -> Unit = {},
+    adaptiveMode: MutableState<Boolean> = mutableStateOf(true),
+    onAdaptiveModeChange: (Boolean) -> Unit = {},
+    showConnectionNotification: MutableState<Boolean> = mutableStateOf(true),
+    onShowConnectionNotificationChange: (Boolean) -> Unit = {},
+    notificationIslandStyle: MutableState<Boolean> = mutableStateOf(true),
+    onNotificationIslandStyleChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val showHeyTapWarning = remember { mutableStateOf(false) }
@@ -65,10 +71,30 @@ fun SettingsPage(
 
         item {
             Card(modifier = Modifier.padding(top = 12.dp)) {
+                // Adaptive模式开关：控制耳机自适应降噪模式的启用状态
+                SwitchPreference(
+                    title = stringResource(R.string.adaptive_mode),
+                    summary = stringResource(R.string.adaptive_mode_summary),
+                    checked = adaptiveMode.value,
+                    onCheckedChange = { onAdaptiveModeChange(it) }
+                )
                 SwitchPreference(
                     title = stringResource(R.string.auto_game_mode),
                     checked = autoGameMode.value,
                     onCheckedChange = { onAutoGameModeChange(it) }
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.show_connection_notification),
+                    summary = stringResource(R.string.show_connection_notification_summary),
+                    checked = showConnectionNotification.value,
+                    onCheckedChange = { onShowConnectionNotificationChange(it) }
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.notification_island_style),
+                    summary = stringResource(R.string.notification_island_style_summary),
+                    checked = notificationIslandStyle.value,
+                    onCheckedChange = { onNotificationIslandStyleChange(it) },
+                    enabled = showConnectionNotification.value
                 )
                 SwitchPreference(
                     title = stringResource(R.string.open_heytap),
@@ -87,6 +113,16 @@ fun SettingsPage(
 
         item {
             Card(modifier = Modifier.padding(top = 12.dp)) {
+                BasicComponent(
+                    title = "OppoPods-Enhanced",
+                    summary = "https://github.com/1812z/OppoPods",
+                    onClick = {
+                        Intent(Intent.ACTION_VIEW).apply {
+                            this.data = Uri.parse("https://github.com/1812z/OppoPods")
+                            context.startActivity(this)
+                        }
+                    }
+                )
                 BasicComponent(
                     title = "OppoPods",
                     summary = "https://github.com/Leaf-lsgtky/OppoPods",

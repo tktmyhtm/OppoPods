@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.agp.app)
-    alias(libs.plugins.ksp)
     alias(libs.plugins.lsplugin.apksign)
     alias(libs.plugins.lsplugin.resopt)
     alias(libs.plugins.kotlinSerialization)
@@ -23,15 +22,14 @@ android {
         applicationId = "moe.chenxy.oppopods"
         minSdk = 35
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.0.5"
+        versionCode = 7
+        versionName = "1.0.6"
     }
 
     buildTypes {
         debug {
             isDebuggable = true
             isMinifyEnabled = false
-            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -49,16 +47,6 @@ android {
     }
 
     dependenciesInfo.includeInApk = false
-
-    java {
-        toolchain {
-            languageVersion = JavaLanguageVersion.of(JavaVersion.VERSION_22.majorVersion)
-        }
-    }
-
-    kotlin {
-        jvmToolchain(JavaVersion.VERSION_22.majorVersion.toInt())
-    }
 
     buildFeatures {
         buildConfig = true
@@ -80,15 +68,24 @@ android {
     }
 }
 
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(JavaVersion.VERSION_22.majorVersion)
+    }
+}
+
+kotlin {
+    jvmToolchain(JavaVersion.VERSION_22.majorVersion.toInt())
+}
+
 configurations.configureEach {
     exclude(group = "androidx.lifecycle", module = "lifecycle-viewmodel-ktx")
 }
 
 dependencies {
     implementation(libs.coreKtx)
-    compileOnly(libs.xposedApi)
-    implementation(libs.yukihookApi)
-    ksp(libs.yukihookKsp)
+    compileOnly(libs.libxposedApi)
+    implementation(libs.libxposedService)
     implementation(libs.kotlinx.serialization.json)
 
     // Compose
@@ -99,7 +96,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.androidx.activity.compose)
 
-    // Miuix
+    // MIUIX
     implementation(libs.miuix)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
@@ -107,4 +104,7 @@ dependencies {
 
     // Navigation3
     implementation(libs.navigation3.runtime)
+
+    // HyperOS Focus Island API
+    implementation(libs.focus.api)
 }
