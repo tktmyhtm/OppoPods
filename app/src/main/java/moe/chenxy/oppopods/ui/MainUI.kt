@@ -49,6 +49,7 @@ import moe.chenxy.oppopods.MainActivity
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.pods.AppRfcommController
 import moe.chenxy.oppopods.pods.NoiseControlMode
+import moe.chenxy.oppopods.pods.RfcommConnectionMethod
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
@@ -93,6 +94,13 @@ fun MainUI(
     val openHeyTap = remember { mutableStateOf(prefs.getBoolean("open_heytap", false)) }
     // Adaptive模式偏好设置（持久化存储），默认开启
     val adaptiveMode = remember { mutableStateOf(prefs.getBoolean("adaptive_mode", true)) }
+    val rfcommConnectionMethod = remember {
+        mutableStateOf(
+            RfcommConnectionMethod.fromPreference(
+                prefs.getString(RfcommConnectionMethod.PREF_KEY, null)
+            )
+        )
+    }
     val showConnectionNotification = remember {
         mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true))
     }
@@ -216,7 +224,11 @@ fun MainUI(
     }
 
     fun onDeviceSelected(device: BluetoothDevice) {
-        appController.connect(device, autoGameMode = autoGameMode.value)
+        appController.connect(
+            device = device,
+            autoGameMode = autoGameMode.value,
+            connectionMethod = rfcommConnectionMethod.value
+        )
     }
 
     fun refreshStatus() {
@@ -366,6 +378,13 @@ fun MainUI(
                         if (!it && displayAnc == NoiseControlMode.ADAPTIVE) {
                             setAncMode(NoiseControlMode.NOISE_CANCELLATION)
                         }
+                    },
+                    rfcommConnectionMethod = rfcommConnectionMethod,
+                    onRfcommConnectionMethodChange = {
+                        rfcommConnectionMethod.value = it
+                        prefs.edit()
+                            .putString(RfcommConnectionMethod.PREF_KEY, it.preferenceValue)
+                            .apply()
                     },
                     showConnectionNotification = showConnectionNotification,
                     onShowConnectionNotificationChange = {

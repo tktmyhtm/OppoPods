@@ -41,6 +41,9 @@
     <string name="theme_follow_system">Follow System</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
+    <string name="rfcomm_connection_method">Connection method</string>
+    <string name="rfcomm_connection_method_uuid">UUID</string>
+    <string name="rfcomm_connection_method_channel">Channel 15</string>
     <string name="cycle_anc">Cycle ANC</string>
     <string name="adaptive_mode">Adaptive Mode</string>
     <string name="adaptive_mode_summary">Enable Adaptive noise control mode for compatible earphones</string>

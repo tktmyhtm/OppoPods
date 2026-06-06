@@ -53,7 +53,11 @@ class AppRfcommController {
     private val _gameMode = MutableStateFlow(false)
     val gameMode: StateFlow<Boolean> = _gameMode
 
-    fun connect(device: BluetoothDevice, autoGameMode: Boolean = false) {
+    fun connect(
+        device: BluetoothDevice,
+        autoGameMode: Boolean = false,
+        connectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID
+    ) {
         if (_connectionState.value == ConnectionState.CONNECTING) return
 
         _deviceName.value = device.name ?: device.address
@@ -62,7 +66,7 @@ class AppRfcommController {
         scope.launch {
             try {
                 delay(300)
-                socket = OppoRfcommSocketFactory.connect(device, TAG)
+                socket = OppoRfcommSocketFactory.connect(device, TAG, connectionMethod)
                 Log.d(TAG, "RFCOMM connected to ${device.name}")
                 isConnected = true
                 _connectionState.value = ConnectionState.CONNECTED

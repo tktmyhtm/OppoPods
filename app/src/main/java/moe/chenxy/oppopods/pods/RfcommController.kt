@@ -300,11 +300,15 @@ object RfcommController {
             mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
         notificationIslandStyleEnabled =
             mPrefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
+        val rfcommConnectionMethod = RfcommConnectionMethod.fromPreference(
+            mPrefs.getString(RfcommConnectionMethod.PREF_KEY, null)
+        )
         Log.d(TAG, "Adaptive mode initial: $adaptiveModeEnabled")
         Log.d(
             TAG,
             "Notification settings initial: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
         )
+        Log.d(TAG, "RFCOMM connection method initial: ${rfcommConnectionMethod.preferenceValue}")
 
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             this.addAction(OppoPodsAction.ACTION_ANC_SELECT)
@@ -336,7 +340,7 @@ object RfcommController {
         CoroutineScope(Dispatchers.IO).launch {
             delay(500)
             try {
-                socket = OppoRfcommSocketFactory.connect(device, TAG)
+                socket = OppoRfcommSocketFactory.connect(device, TAG, rfcommConnectionMethod)
 
                 // Start reader thread
                 startPacketReader(socket!!.inputStream)

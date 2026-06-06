@@ -10,11 +10,11 @@ import java.util.UUID
 /**
  * Creates and connects the OPPO/HeyMelody SPP socket.
  *
- * HeyMelody uses createRfcommSocketToServiceRecord(UUID). The fixed channel 15
- * path is kept as a compatibility fallback for devices/ROMs where SDP fails.
+ * HeyMelody uses createRfcommSocketToServiceRecord(UUID). A fixed channel 15
+ * path is also available for devices/ROMs where SDP fails.
  */
 object OppoRfcommSocketFactory {
-    private const val FALLBACK_RFCOMM_CHANNEL = 15
+    private const val RFCOMM_CHANNEL = 15
 
     private val preferredUuids = listOf(
         UUID.fromString("00001107-D102-11E1-9B23-00025B00A5A5"),
@@ -23,7 +23,20 @@ object OppoRfcommSocketFactory {
 
     @SuppressLint("MissingPermission", "DiscouragedPrivateApi")
     @Throws(IOException::class)
-    fun connect(device: BluetoothDevice, logTag: String): BluetoothSocket {
+    fun connect(
+        device: BluetoothDevice,
+        logTag: String,
+        connectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID
+    ): BluetoothSocket {
+        Log.d(logTag, "RFCOMM connection method: ${connectionMethod.preferenceValue}")
+        return when (connectionMethod) {
+            RfcommConnectionMethod.UUID -> connectViaUuids(device, logTag)
+            RfcommConnectionMethod.CHANNEL -> connectViaChannel(device, logTag)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectViaUuids(device: BluetoothDevice, logTag: String): BluetoothSocket {
         val failures = mutableListOf<Exception>()
 
         for (uuid in preferredUuids) {
@@ -39,21 +52,27 @@ object OppoRfcommSocketFactory {
             tryConnect(socket, "UUID $uuid", logTag, failures)?.let { return it }
         }
 
-        val fallbackSocket = try {
-            Log.d(logTag, "Creating RFCOMM socket with fallback channel $FALLBACK_RFCOMM_CHANNEL")
+        throw connectException("Unable to connect OPPO RFCOMM socket via UUID", failures)
+    }
+
+    @SuppressLint("DiscouragedPrivateApi")
+    private fun connectViaChannel(device: BluetoothDevice, logTag: String): BluetoothSocket {
+        val failures = mutableListOf<Exception>()
+        val channelSocket = try {
+            Log.d(logTag, "Creating RFCOMM socket with channel $RFCOMM_CHANNEL")
             val method = device.javaClass.getMethod(
                 "createRfcommSocket",
                 Int::class.javaPrimitiveType
             )
-            method.invoke(device, FALLBACK_RFCOMM_CHANNEL) as BluetoothSocket
+            method.invoke(device, RFCOMM_CHANNEL) as BluetoothSocket
         } catch (e: Exception) {
-            Log.w(logTag, "Failed to create fallback RFCOMM socket", e)
+            Log.w(logTag, "Failed to create channel RFCOMM socket", e)
             failures += e
-            throw connectException("Unable to create OPPO RFCOMM socket", failures)
+            throw connectException("Unable to create OPPO RFCOMM socket via channel $RFCOMM_CHANNEL", failures)
         }
 
-        return tryConnect(fallbackSocket, "channel $FALLBACK_RFCOMM_CHANNEL", logTag, failures)
-            ?: throw connectException("Unable to connect OPPO RFCOMM socket", failures)
+        return tryConnect(channelSocket, "channel $RFCOMM_CHANNEL", logTag, failures)
+            ?: throw connectException("Unable to connect OPPO RFCOMM socket via channel $RFCOMM_CHANNEL", failures)
     }
 
     private fun tryConnect(

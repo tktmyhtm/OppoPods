@@ -32,13 +32,13 @@ OppoPods hooks into three system processes:
 
 | Process | Purpose |
 |---------|---------|
-| `com.android.bluetooth` | Detect OPPO earphone via A2DP, establish RFCOMM via HeyMelody UUIDs with channel 15 fallback, send/receive protocol packets |
+| `com.android.bluetooth` | Detect OPPO earphone via A2DP, establish RFCOMM via the selected UUID or channel mode, send/receive protocol packets |
 | `com.xiaomi.bluetooth` | Show Focus Island battery popup, create persistent notification |
 | `com.android.systemui` | Intercept Control Center device card tap to open quick popup |
 
 ### Protocol
 
-Communication uses Bluetooth Classic **RFCOMM**. The app first tries the HeyMelody SPP UUIDs `00001107-D102-11E1-9B23-00025B00A5A5` and `0000079A-D102-11E1-9B23-00025B00A5A5`, then falls back to channel 15. Packet format:
+Communication uses Bluetooth Classic **RFCOMM**. The connection method can be selected in settings: `UUID` tries the HeyMelody SPP UUIDs `00001107-D102-11E1-9B23-00025B00A5A5` and `0000079A-D102-11E1-9B23-00025B00A5A5`; `Channel 15` uses the fixed RFCOMM channel directly. Packet format:
 
 ```
 AA [TotalLen] 00 00 [Cmd 2B LE] [Seq] [PayLen 2B LE] [Payload...]
@@ -112,13 +112,13 @@ OppoPods 挂钩三个系统进程：
 
 | 进程 | 用途 |
 |------|------|
-| `com.android.bluetooth` | 通过 A2DP 检测 OPPO 耳机，优先使用欢律 UUID 建立 RFCOMM，失败后回退通道 15，收发协议包 |
+| `com.android.bluetooth` | 通过 A2DP 检测 OPPO 耳机，按设置选择 UUID 或通道模式建立 RFCOMM，收发协议包 |
 | `com.xiaomi.bluetooth` | 焦点岛电量弹窗、创建常驻通知 |
 | `com.android.systemui` | 拦截控制中心设备卡片点击，打开快捷弹窗 |
 
 ### 协议
 
-通信使用经典蓝牙 **RFCOMM**。应用会优先尝试欢律 SPP UUID `00001107-D102-11E1-9B23-00025B00A5A5` 和 `0000079A-D102-11E1-9B23-00025B00A5A5`，失败后回退到通道 15。数据包格式：
+通信使用经典蓝牙 **RFCOMM**。连接方式可在设置中选择：`UUID` 会尝试欢律 SPP UUID `00001107-D102-11E1-9B23-00025B00A5A5` 和 `0000079A-D102-11E1-9B23-00025B00A5A5`；`通道 15` 会直接使用固定 RFCOMM 通道。数据包格式：
 
 ```
 AA [总长度] 00 00 [命令 2字节小端] [序列号] [载荷长度 2字节小端] [载荷...]

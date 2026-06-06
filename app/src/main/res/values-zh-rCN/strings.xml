@@ -42,6 +42,9 @@
     <string name="theme_follow_system">跟随系统</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
+    <string name="rfcomm_connection_method">连接方式</string>
+    <string name="rfcomm_connection_method_uuid">UUID</string>
+    <string name="rfcomm_connection_method_channel">通道 15</string>
     <string name="cycle_anc">切换降噪</string>
     <string name="adaptive_mode">自适应模式</string>
     <string name="adaptive_mode_summary">为兼容耳机启用自适应降噪模式，关闭后将隐藏该选项并禁用相关音频处理</string>

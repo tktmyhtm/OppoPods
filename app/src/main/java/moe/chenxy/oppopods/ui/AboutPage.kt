@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import moe.chenxy.oppopods.R
+import moe.chenxy.oppopods.pods.RfcommConnectionMethod
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -36,6 +37,8 @@ fun SettingsPage(
     onOpenHeyTapChange: (Boolean) -> Unit = {},
     adaptiveMode: MutableState<Boolean> = mutableStateOf(true),
     onAdaptiveModeChange: (Boolean) -> Unit = {},
+    rfcommConnectionMethod: MutableState<RfcommConnectionMethod> = mutableStateOf(RfcommConnectionMethod.UUID),
+    onRfcommConnectionMethodChange: (RfcommConnectionMethod) -> Unit = {},
     showConnectionNotification: MutableState<Boolean> = mutableStateOf(true),
     onShowConnectionNotificationChange: (Boolean) -> Unit = {},
     notificationIslandStyle: MutableState<Boolean> = mutableStateOf(true),
@@ -47,6 +50,10 @@ fun SettingsPage(
         stringResource(R.string.theme_follow_system),
         stringResource(R.string.theme_light),
         stringResource(R.string.theme_dark)
+    )
+    val rfcommConnectionOptions = listOf(
+        stringResource(R.string.rfcomm_connection_method_uuid),
+        stringResource(R.string.rfcomm_connection_method_channel)
     )
 
     LazyColumn(
@@ -71,6 +78,14 @@ fun SettingsPage(
 
         item {
             Card(modifier = Modifier.padding(top = 12.dp)) {
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.rfcomm_connection_method),
+                    items = rfcommConnectionOptions,
+                    selectedIndex = RfcommConnectionMethod.selectedIndexOf(rfcommConnectionMethod.value),
+                    onSelectedIndexChange = {
+                        onRfcommConnectionMethodChange(RfcommConnectionMethod.fromSelectedIndex(it))
+                    }
+                )
                 // Adaptive模式开关：控制耳机自适应降噪模式的启用状态
                 SwitchPreference(
                     title = stringResource(R.string.adaptive_mode),
