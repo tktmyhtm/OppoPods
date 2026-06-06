@@ -59,6 +59,7 @@ object RfcommController {
     lateinit var currentBatteryParams: BatteryParams
     private var currentAnc: Int = 1
     private var currentGameMode: Boolean = false
+    private var autoGameModeEnabled: Boolean = false
     // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
     private var adaptiveModeEnabled: Boolean = true
     private var showConnectionNotificationEnabled: Boolean = true
@@ -162,6 +163,10 @@ object RfcommController {
             OppoPodsAction.ACTION_GAME_MODE_SET -> {
                 val enabled = intent.getBooleanExtra("enabled", false)
                 setGameMode(enabled)
+            }
+            OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED -> {
+                autoGameModeEnabled = intent.getBooleanExtra("enabled", autoGameModeEnabled)
+                Log.d(TAG, "Auto game mode synced: $autoGameModeEnabled")
             }
             OppoPodsAction.ACTION_CYCLE_ANC -> {
                 cycleAnc()
@@ -301,6 +306,7 @@ object RfcommController {
         cachedDeviceName = device.name ?: ""
         // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
         adaptiveModeEnabled = mPrefs.getBoolean("adaptive_mode", true)
+        autoGameModeEnabled = mPrefs.getBoolean("auto_game_mode", false)
         showConnectionNotificationEnabled =
             mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
         notificationIslandStyleEnabled =
@@ -313,6 +319,7 @@ object RfcommController {
             TAG,
             "Notification settings initial: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
         )
+        Log.d(TAG, "Auto game mode initial: $autoGameModeEnabled")
         Log.d(TAG, "RFCOMM connection method initial: ${rfcommConnectionMethod.preferenceValue}")
 
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
@@ -320,6 +327,7 @@ object RfcommController {
             this.addAction(OppoPodsAction.ACTION_PODS_UI_INIT)
             this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
+            this.addAction(OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED)
             this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
             this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
             this.addAction(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED)
@@ -352,13 +360,10 @@ object RfcommController {
 
                 // Initial status query (combo: battery wake + mode)
                 delay(300)
-                queryStatus()
+                sendStatusQueryPackets()
 
-                // Auto-enable game mode if preference is set.
-                // Read remote module preferences since this runs in com.android.bluetooth.
-                if (mPrefs.getBoolean("auto_game_mode", false)) {
-                    delay(100)
-                    sendPacketSafe(Enums.GAME_MODE_ON)
+                if (autoGameModeEnabled) {
+                    enableGameModeOnConnect()
                 }
             } catch (e: IOException) {
                 Log.e(TAG, "RFCOMM connect failed", e)
@@ -554,16 +559,46 @@ object RfcommController {
         }
     }
 
+    private suspend fun enableGameModeOnConnect() {
+        // Keep the hook path aligned with the standalone RFCOMM flow: wait for the
+        // first query responses, send, verify, and retry once if the earbuds report off.
+        delay(500)
+        if (!isConnected || mContext == null) return
+        Log.d(TAG, "Auto game mode: enabling after connect")
+        currentGameMode = true
+        changeUIGameModeStatus(true)
+        sendPacketSafe(Enums.GAME_MODE_ON)
+
+        delay(300)
+        if (!isConnected) return
+        sendPacketSafe(Enums.QUERY_STATUS)
+
+        delay(500)
+        if (!isConnected || mContext == null) return
+        if (!currentGameMode) {
+            Log.d(TAG, "Auto game mode: first attempt didn't take, retrying")
+            currentGameMode = true
+            changeUIGameModeStatus(true)
+            sendPacketSafe(Enums.GAME_MODE_ON)
+            delay(300)
+            sendPacketSafe(Enums.QUERY_STATUS)
+        }
+    }
+
+    private suspend fun sendStatusQueryPackets() {
+        sendPacketSafe(Enums.QUERY_STATUS)
+        delay(50)
+        sendPacketSafe(Enums.QUERY_BATTERY)
+        delay(50)
+        sendPacketSafe(Enums.QUERY_ANC)
+    }
+
     /**
      * Combo query strategy: send batch query (wake + game mode), then battery, then ANC.
      */
     fun queryStatus() {
         CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(Enums.QUERY_STATUS)
-            delay(50)
-            sendPacketSafe(Enums.QUERY_BATTERY)
-            delay(50)
-            sendPacketSafe(Enums.QUERY_ANC)
+            sendStatusQueryPackets()
         }
     }
 

@@ -156,6 +156,10 @@ fun MainUI(
                             p1.getParcelableExtra("status", BatteryParams::class.java)!!
                     }
 
+                    OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED -> {
+                        gameMode.value = p1.getBooleanExtra("enabled", false)
+                    }
+
                     OppoPodsAction.ACTION_PODS_CONNECTED -> {
                         val deviceName = p1.getStringExtra("device_name")
                         mainTitle.value = deviceName ?: ""
@@ -179,6 +183,7 @@ fun MainUI(
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED)
+            addAction(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_CONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
         }, Context.RECEIVER_EXPORTED)
@@ -359,6 +364,12 @@ fun MainUI(
                     onAutoGameModeChange = {
                         autoGameMode.value = it
                         prefs.edit().putBoolean("auto_game_mode", it).apply()
+                        Intent(OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED).apply {
+                            setPackage("com.android.bluetooth")
+                            putExtra("enabled", it)
+                            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                            context.sendBroadcast(this)
+                        }
                     },
                     openHeyTap = openHeyTap,
                     onOpenHeyTapChange = {
