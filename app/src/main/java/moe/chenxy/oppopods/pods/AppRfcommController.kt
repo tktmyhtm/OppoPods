@@ -26,7 +26,6 @@ import java.io.InputStream
 class AppRfcommController {
     companion object {
         private const val TAG = "OppoPods-AppRfcomm"
-        private const val RFCOMM_CHANNEL = 15
         private const val BATTERY_POLL_INTERVAL_MS = 30_000L
     }
 
@@ -54,12 +53,6 @@ class AppRfcommController {
     private val _gameMode = MutableStateFlow(false)
     val gameMode: StateFlow<Boolean> = _gameMode
 
-    @SuppressLint("DiscouragedPrivateApi")
-    private fun createRfcommSocket(device: BluetoothDevice): BluetoothSocket {
-        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-        return method.invoke(device, RFCOMM_CHANNEL) as BluetoothSocket
-    }
-
     fun connect(device: BluetoothDevice, autoGameMode: Boolean = false) {
         if (_connectionState.value == ConnectionState.CONNECTING) return
 
@@ -69,8 +62,7 @@ class AppRfcommController {
         scope.launch {
             try {
                 delay(300)
-                socket = createRfcommSocket(device)
-                socket!!.connect()
+                socket = OppoRfcommSocketFactory.connect(device, TAG)
                 Log.d(TAG, "RFCOMM connected to ${device.name}")
                 isConnected = true
                 _connectionState.value = ConnectionState.CONNECTED

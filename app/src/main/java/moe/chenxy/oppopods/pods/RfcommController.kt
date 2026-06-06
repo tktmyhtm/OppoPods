@@ -37,7 +37,6 @@ import java.util.concurrent.Executor
 @SuppressLint("MissingPermission", "StaticFieldLeak")
 object RfcommController {
     private const val TAG = "OppoPods-RfcommController"
-    private const val RFCOMM_CHANNEL = 15
     private const val BATTERY_POLL_INTERVAL_MS = 30_000L
 
     // Basic Objects
@@ -290,15 +289,6 @@ object RfcommController {
         mediaRouter.unregisterRouteCallback(routeCallback)
     }
 
-    /**
-     * Create RFCOMM socket to OPPO earphone on channel 15 via reflection.
-     */
-    @SuppressLint("DiscouragedPrivateApi")
-    private fun createRfcommSocket(device: BluetoothDevice): BluetoothSocket {
-        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-        return method.invoke(device, RFCOMM_CHANNEL) as BluetoothSocket
-    }
-
     fun connectPod(context: Context, device: BluetoothDevice, prefs: SharedPreferences) {
         mContext = context
         mDevice = device
@@ -346,9 +336,7 @@ object RfcommController {
         CoroutineScope(Dispatchers.IO).launch {
             delay(500)
             try {
-                socket = createRfcommSocket(device)
-                socket!!.connect()
-                Log.d(TAG, "RFCOMM connected!")
+                socket = OppoRfcommSocketFactory.connect(device, TAG)
 
                 // Start reader thread
                 startPacketReader(socket!!.inputStream)
