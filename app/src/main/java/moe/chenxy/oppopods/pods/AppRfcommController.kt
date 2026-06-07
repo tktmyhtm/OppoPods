@@ -103,11 +103,14 @@ class AppRfcommController {
     private fun startPacketReader(inputStream: InputStream) {
         scope.launch {
             val buffer = ByteArray(1024)
+            val framer = OppoPacketFramer()
             try {
                 while (isConnected) {
                     val bytesRead = inputStream.read(buffer)
                     if (bytesRead > 0) {
-                        handlePacket(buffer.copyOfRange(0, bytesRead))
+                        framer.append(buffer, bytesRead).forEach { packet ->
+                            handlePacket(packet)
+                        }
                     } else if (bytesRead == -1) {
                         break
                     }
@@ -152,24 +155,16 @@ class AppRfcommController {
         // Try parse as active battery report (unsolicited, Cmd=0x0204, type=0x01)
         val activeResult = BatteryParser.parseActiveReport(packet)
         if (activeResult != null) {
-            val left = PodParams(
-                activeResult.left?.level ?: 0,
-                activeResult.left?.isCharging == true,
-                activeResult.left != null,
-                0
-            )
-            val right = PodParams(
-                activeResult.right?.level ?: 0,
-                activeResult.right?.isCharging == true,
-                activeResult.right != null,
-                0
-            )
-            val case = PodParams(
-                activeResult.case?.level ?: 0,
-                activeResult.case?.isCharging == true,
-                activeResult.case != null,
-                0
-            )
+            val current = _batteryParams.value
+            val left = activeResult.left?.let {
+                PodParams(it.level, it.isCharging, true, current.left?.rawStatus ?: 0)
+            } ?: current.left
+            val right = activeResult.right?.let {
+                PodParams(it.level, it.isCharging, true, current.right?.rawStatus ?: 0)
+            } ?: current.right
+            val case = activeResult.case?.let {
+                PodParams(it.level, it.isCharging, true, current.case?.rawStatus ?: 0)
+            } ?: current.case
             _batteryParams.value = BatteryParams(left, right, case)
             return
         }

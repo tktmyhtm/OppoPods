@@ -29,6 +29,48 @@ object OppoPackets {
     }
 }
 
+class OppoPacketFramer {
+    private var pending = ByteArray(0)
+
+    fun append(buffer: ByteArray, length: Int): List<ByteArray> {
+        if (length <= 0) return emptyList()
+
+        pending += buffer.copyOfRange(0, length)
+        val frames = mutableListOf<ByteArray>()
+
+        while (pending.isNotEmpty()) {
+            val start = pending.indexOf(OPPO_PACKET_HEADER)
+            if (start < 0) {
+                pending = ByteArray(0)
+                break
+            }
+            if (start > 0) {
+                pending = pending.copyOfRange(start, pending.size)
+            }
+            if (pending.size < 2) break
+
+            val totalLen = pending[1].toInt() and 0xFF
+            val frameLen = totalLen + 2
+            if (totalLen < OPPO_PACKET_MIN_TOTAL_LEN || frameLen > OPPO_PACKET_MAX_FRAME_LEN) {
+                pending = pending.copyOfRange(1, pending.size)
+                continue
+            }
+            if (pending.size < frameLen) break
+
+            frames += pending.copyOfRange(0, frameLen)
+            pending = pending.copyOfRange(frameLen, pending.size)
+        }
+
+        return frames
+    }
+
+    companion object {
+        private val OPPO_PACKET_HEADER = 0xAA.toByte()
+        private const val OPPO_PACKET_MIN_TOTAL_LEN = 7
+        private const val OPPO_PACKET_MAX_FRAME_LEN = 512
+    }
+}
+
 /** ANC mode values for OPPO earphones (used in SET commands). */
 object AncMode {
     const val OFF = 0x01

@@ -211,40 +211,66 @@ object RfcommController {
         }
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
-    fun handleBatteryChanged(result: BatteryParser.BatteryResult) {
-        val left = PodParams(
-            result.left?.level ?: 0,
-            result.left?.isCharging == true,
-            result.left != null,
-            0
-        )
-        val right = PodParams(
-            result.right?.level ?: 0,
-            result.right?.isCharging == true,
-            result.right != null,
-            0
-        )
-        val case = if (result.case != null) {
-            lastKnownCaseBattery = result.case.level
-            lastKnownCaseCharging = result.case.isCharging
-            PodParams(
-                result.case.level,
-                result.case.isCharging,
-                true,
-                0
+    private fun currentBatterySnapshot(): BatteryParams {
+        return if (::currentBatteryParams.isInitialized) {
+            BatteryParams(
+                currentBatteryParams.left?.copy(),
+                currentBatteryParams.right?.copy(),
+                currentBatteryParams.case?.copy()
             )
         } else {
-            PodParams(
-                lastKnownCaseBattery,
-                lastKnownCaseCharging,
-                false,
-                0
-            )
+            BatteryParams()
         }
+    }
+
+    private fun batteryInfoToPodParams(
+        info: BatteryParser.BatteryInfo?,
+        previous: PodParams?,
+        preserveMissing: Boolean
+    ): PodParams {
+        if (info != null) {
+            return PodParams(info.level, info.isCharging, true, previous?.rawStatus ?: 0)
+        }
+        if (preserveMissing && previous != null) return previous.copy()
+        return PodParams(0, false, false, previous?.rawStatus ?: 0)
+    }
+
+    private fun caseInfoToPodParams(
+        info: BatteryParser.BatteryInfo?,
+        previous: PodParams?,
+        preserveMissing: Boolean
+    ): PodParams {
+        if (info != null) {
+            lastKnownCaseBattery = info.level
+            lastKnownCaseCharging = info.isCharging
+            return PodParams(info.level, info.isCharging, true, previous?.rawStatus ?: 0)
+        }
+        if (preserveMissing && previous != null) return previous.copy()
+        return PodParams(lastKnownCaseBattery, lastKnownCaseCharging, false, previous?.rawStatus ?: 0)
+    }
+
+    fun handleBatteryChanged(result: BatteryParser.BatteryResult, preserveMissing: Boolean = false) {
+        val previous = currentBatterySnapshot()
+        val batteryParams = BatteryParams(
+            left = batteryInfoToPodParams(result.left, previous.left, preserveMissing),
+            right = batteryInfoToPodParams(result.right, previous.right, preserveMissing),
+            case = caseInfoToPodParams(result.case, previous.case, preserveMissing)
+        )
+        publishBatteryParams(batteryParams)
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    private fun publishBatteryParams(batteryParams: BatteryParams) {
+        val context = mContext ?: return
+        val left = batteryParams.left ?: PodParams()
+        val right = batteryParams.right ?: PodParams()
+        val case = batteryParams.case ?: PodParams()
 
         if (BuildConfig.DEBUG) {
-            Log.v(TAG, "batt left ${left.battery} right ${right.battery} case ${case.battery}")
+            Log.v(
+                TAG,
+                "batt left ${left.battery}/${left.isCharging} right ${right.battery}/${right.isCharging} case ${case.battery}/${case.isCharging}"
+            )
         }
 
         val shouldShowToast = !mShowedConnectedToast
@@ -255,12 +281,11 @@ object RfcommController {
             if (!hasValidData) return
         }
 
-        val batteryParams = BatteryParams(left, right, case)
         currentBatteryParams = batteryParams
 
         if (shouldShowToast) {
             MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
-                mContext!!,
+                context,
                 batteryParams,
                 showConnectionNotificationEnabled,
                 notificationIslandStyleEnabled
@@ -269,14 +294,14 @@ object RfcommController {
         }
         if (showConnectionNotificationEnabled) {
             MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
-                mContext!!,
+                context,
                 batteryParams,
                 mDevice,
                 showConnectionNotificationEnabled,
                 notificationIslandStyleEnabled
             )
         } else {
-            cancelPodsNotificationByMiuiBt(mContext!!, mDevice)
+            cancelPodsNotificationByMiuiBt(context, mDevice)
         }
         changeUIBatteryStatus(batteryParams)
 
@@ -506,13 +531,15 @@ object RfcommController {
     private fun startPacketReader(readerSocket: BluetoothSocket) {
         CoroutineScope(Dispatchers.IO).launch {
             val buffer = ByteArray(1024)
+            val framer = OppoPacketFramer()
             try {
                 val inputStream = readerSocket.inputStream
                 while (isPodConnected && isActiveRfcommSocket(readerSocket)) {
                     val bytesRead = inputStream.read(buffer)
                     if (bytesRead > 0) {
-                        val packet = buffer.copyOfRange(0, bytesRead)
-                        handleOppoPacket(packet)
+                        framer.append(buffer, bytesRead).forEach { packet ->
+                            handleOppoPacket(packet)
+                        }
                     } else if (bytesRead == -1) {
                         Log.d(TAG, "RFCOMM stream ended")
                         break
@@ -547,7 +574,7 @@ object RfcommController {
         // Try parse as active battery report (unsolicited, Cmd=0x0204, type=0x01)
         val activeResult = BatteryParser.parseActiveReport(packet)
         if (activeResult != null) {
-            handleBatteryChanged(activeResult)
+            handleBatteryChanged(activeResult, preserveMissing = true)
             return
         }
 
