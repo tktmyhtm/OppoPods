@@ -103,12 +103,10 @@ object MiuiStrongToastUtil {
 
     fun showPodsBatteryToastByMiuiBt(
         context: Context,
-        batteryParams: BatteryParams,
-        notificationSettings: NotificationSettings = NotificationSettings()
+        batteryParams: BatteryParams
     ) {
         val intent = Intent("chen.action.oppopods.sendstrongtoast")
         intent.putExtra("batteryParams", batteryParams)
-        notificationSettings.putExtras(intent)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)
     }

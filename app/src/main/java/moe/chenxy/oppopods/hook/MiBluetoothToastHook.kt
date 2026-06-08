@@ -310,11 +310,7 @@ object MiBluetoothToastHook : HookContext() {
                                     "batteryParams",
                                     BatteryParams::class.java
                                 ) ?: return
-                                if (effectiveNotificationSettings(p1).showNotificationAsIsland) {
-                                    FocusIslandUtil.showBatteryIsland(context, batteryParams)
-                                } else {
-                                    Log.d("OppoPods", "Skip Focus Island battery toast: disabled by notification settings")
-                                }
+                                FocusIslandUtil.showBatteryIsland(context, batteryParams)
                             } else if (p1?.action == "chen.action.oppopods.updatepodsnotification") {
                                 val batteryParams = p1.getParcelableExtra("batteryParams", BatteryParams::class.java)
                                 val device = p1.getParcelableExtra("device", BluetoothDevice::class.java)
