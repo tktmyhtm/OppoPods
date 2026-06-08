@@ -113,8 +113,9 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
                         }
                     }
                     OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
-                        batteryParams.value =
-                            p1.getParcelableExtra("status", BatteryParams::class.java)!!
+                        p1.getParcelableExtra("status", BatteryParams::class.java)?.let {
+                            batteryParams.value = it
+                        }
                     }
                     OppoPodsAction.ACTION_PODS_CONNECTED -> {
                         deviceName.value = p1.getStringExtra("device_name") ?: ""
@@ -140,8 +141,11 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
             addAction(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED)
         }, Context.RECEIVER_EXPORTED)
 
-        context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT))
+        context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT).apply {
+            setPackage("com.android.bluetooth")
+        })
         context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            setPackage("com.android.bluetooth")
             putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
         })
 
@@ -159,6 +163,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
         while (true) {
             delay(15_000)
             context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+                setPackage("com.android.bluetooth")
                 putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
             })
         }
@@ -174,6 +179,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
         }
         Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
             putExtra("status", status)
+            setPackage("com.android.bluetooth")
             context.sendBroadcast(this)
         }
     }
@@ -182,6 +188,7 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
         gameMode.value = enabled
         Intent(OppoPodsAction.ACTION_GAME_MODE_SET).apply {
             putExtra("enabled", enabled)
+            setPackage("com.android.bluetooth")
             context.sendBroadcast(this)
         }
     }

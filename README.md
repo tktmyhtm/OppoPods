@@ -15,8 +15,8 @@ Based on [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen.
 - **ANC Control** — Switch between Off / Noise Cancellation / Adaptive / Transparency
 - **Game Mode** — Low-latency audio toggle with optional auto-enable on connect
 - **Battery Display** — Real-time battery level for left ear, right ear, and charging case
-- **Quick Popup** — Tap notification or Control Center card to open a compact floating dialog with battery, ANC, and game mode controls; tap "More" to enter the full app
-- **HyperOS Integration** — Focus Island battery popup on connection, persistent notification, status bar headset icon
+- **Quick Popup** — Tap the persistent notification to open a compact floating dialog with battery, ANC, and game mode controls; tap "More" to enter the full app
+- **HyperOS Integration** — Focus Island battery popup on connection, optional Super Island-style persistent notification, status bar headset icon
 - **Dark Mode** — Full dark theme support including popup dialog and battery icons
 - **Standalone Mode** — Direct RFCOMM connection when Xposed hooks are unavailable
 
@@ -24,17 +24,18 @@ Based on [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen.
 
 - Xiaomi device running **HyperOS** (Android 15+)
 - **LSPosed** or compatible Xposed framework
-- Module scope: `com.android.bluetooth`, `com.xiaomi.bluetooth`, `com.android.systemui`
+- Module scope: `com.android.bluetooth`, `com.milink.service`, `com.xiaomi.bluetooth`, `com.android.settings`
 
 ### How It Works
 
-OppoPods hooks into three system processes:
+OppoPods hooks into four packages:
 
 | Process | Purpose |
 |---------|---------|
 | `com.android.bluetooth` | Detect OPPO earphone via A2DP, establish RFCOMM via the selected UUID or channel mode, send/receive protocol packets |
+| `com.milink.service` | Mirror headset ANC and battery state into HyperOS headset runtime |
 | `com.xiaomi.bluetooth` | Show Focus Island battery popup, create persistent notification |
-| `com.android.systemui` | Intercept Control Center device card tap to open quick popup |
+| `com.android.settings` | Sync headset settings page state and ANC commands |
 
 ### Protocol
 
@@ -68,14 +69,14 @@ AA 13 00 00 0D 01 00 0C 00 0B 05 04 0B 11 13 18 06 1B 1C 27 28
 ### Install
 
 1. Install the APK
-2. Enable the module in LSPosed with scope: `com.android.bluetooth`, `com.xiaomi.bluetooth`, `com.android.systemui`
+2. Enable the module in LSPosed with scope: `com.android.bluetooth`, `com.milink.service`, `com.xiaomi.bluetooth`, `com.android.settings`
 3. Reboot
 4. Connect your OPPO earphones via Bluetooth
 
 ### Credits
 
 - [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen — original project
-- [YukiHookAPI](https://github.com/HighCapable/YukiHookAPI) — Xposed hook framework
+- [libxposed](https://github.com/libxposed/api) — Xposed module API
 - [Miuix](https://github.com/YuKongA/miuix) — HyperOS-style Compose UI components
 
 ### License
@@ -95,8 +96,8 @@ GPL-3.0
 - **降噪控制** — 在关闭 / 降噪 / 自适应 / 通透模式之间切换
 - **游戏模式** — 低延迟音频开关，支持连接时自动开启
 - **电量显示** — 实时显示左耳、右耳、充电盒电量
-- **快捷弹窗** — 点击通知或控制中心耳机卡片，弹出浮窗显示电量、降噪、游戏模式控制；点击「更多」进入完整页面
-- **HyperOS 集成** — 连接时焦点岛电量弹窗、常驻通知、状态栏耳机图标
+- **快捷弹窗** — 点击常驻通知，弹出浮窗显示电量、降噪、游戏模式控制；点击「更多」进入完整页面
+- **HyperOS 集成** — 连接时焦点岛电量弹窗、可选超级岛样式常驻通知、状态栏耳机图标
 - **深色模式** — 完整深色主题支持，包括弹窗对话框与电池图标
 - **独立模式** — 在 Xposed 钩子不可用时通过 RFCOMM 直连耳机
 
@@ -104,17 +105,18 @@ GPL-3.0
 
 - 小米设备，运行 **HyperOS**（Android 15+）
 - **LSPosed** 或兼容的 Xposed 框架
-- 模块作用域：`com.android.bluetooth`、`com.xiaomi.bluetooth`、`com.android.systemui`
+- 模块作用域：`com.android.bluetooth`、`com.milink.service`、`com.xiaomi.bluetooth`、`com.android.settings`
 
 ### 工作原理
 
-OppoPods 挂钩三个系统进程：
+OppoPods 挂钩四个包：
 
 | 进程 | 用途 |
 |------|------|
 | `com.android.bluetooth` | 通过 A2DP 检测 OPPO 耳机，按设置选择 UUID 或通道模式建立 RFCOMM，收发协议包 |
+| `com.milink.service` | 将耳机电量和降噪状态同步到 HyperOS 耳机运行时 |
 | `com.xiaomi.bluetooth` | 焦点岛电量弹窗、创建常驻通知 |
-| `com.android.systemui` | 拦截控制中心设备卡片点击，打开快捷弹窗 |
+| `com.android.settings` | 同步系统耳机设置页状态和降噪命令 |
 
 ### 协议
 
@@ -148,14 +150,14 @@ AA 13 00 00 0D 01 00 0C 00 0B 05 04 0B 11 13 18 06 1B 1C 27 28
 ### 安装
 
 1. 安装 APK
-2. 在 LSPosed 中启用模块，作用域选择：`com.android.bluetooth`、`com.xiaomi.bluetooth`、`com.android.systemui`
+2. 在 LSPosed 中启用模块，作用域选择：`com.android.bluetooth`、`com.milink.service`、`com.xiaomi.bluetooth`、`com.android.settings`
 3. 重启设备
 4. 通过蓝牙连接你的 OPPO 耳机
 
 ### 致谢
 
 - [HyperPods](https://github.com/Art-Chen/HyperPods) by Art_Chen — 原始项目
-- [YukiHookAPI](https://github.com/HighCapable/YukiHookAPI) — Xposed 钩子框架
+- [libxposed](https://github.com/libxposed/api) — Xposed 模块 API
 - [Miuix](https://github.com/YuKongA/miuix) — HyperOS 风格 Compose UI 组件
 
 ### 许可证

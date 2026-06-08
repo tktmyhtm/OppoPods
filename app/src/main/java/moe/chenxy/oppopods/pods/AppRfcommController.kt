@@ -67,6 +67,7 @@ class AppRfcommController {
         this.gameModeImplementation = gameModeImplementation
         _deviceName.value = device.name ?: device.address
         _connectionState.value = ConnectionState.CONNECTING
+        batteryPollJob?.cancel()
 
         scope.launch {
             try {
@@ -84,15 +85,19 @@ class AppRfcommController {
                 if (autoGameMode) {
                     enableGameModeOnConnect()
                 }
+                startBatteryPolling()
             } catch (e: IOException) {
                 Log.e(TAG, "RFCOMM connect failed", e)
                 _connectionState.value = ConnectionState.ERROR
                 isConnected = false
+                batteryPollJob?.cancel()
             }
         }
+    }
 
+    private fun startBatteryPolling() {
+        batteryPollJob?.cancel()
         batteryPollJob = scope.launch {
-            delay(2000)
             while (isConnected) {
                 delay(BATTERY_POLL_INTERVAL_MS)
                 if (isConnected) queryStatus()

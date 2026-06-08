@@ -27,8 +27,8 @@ import moe.chenxy.oppopods.utils.SystemApisUtils.setIconVisibility
 import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil
 import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.NotificationSettings
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 import java.io.IOException
 import android.content.SharedPreferences
@@ -69,8 +69,11 @@ object RfcommController {
     private var lastGameModeStatusUpdateMs: Long = 0L
     // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
     private var adaptiveModeEnabled: Boolean = true
-    private var showConnectionNotificationEnabled: Boolean = true
-    private var notificationIslandStyleEnabled: Boolean = true
+    private var notificationSettings: NotificationSettings = NotificationSettings()
+    private val showConnectionNotificationEnabled: Boolean
+        get() = notificationSettings.showConnectionNotification
+    private val notificationIslandStyleEnabled: Boolean
+        get() = notificationSettings.notificationIslandStyle
     private var lastKnownCaseBattery: Int = 0
     private var lastKnownCaseCharging: Boolean = false
     private var cachedDeviceName: String = ""
@@ -80,7 +83,7 @@ object RfcommController {
 
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(p0: Context?, p1: Intent?) {
-            handleUIEvent(p1!!)
+            p1?.let { handleUIEvent(it) }
         }
     }
 
@@ -130,15 +133,11 @@ object RfcommController {
         }
 
         if (!::currentBatteryParams.isInitialized) return
-        if (!notificationIslandStyleEnabled) {
-            cancelPodsNotificationByMiuiBt(context, mDevice)
-        }
         MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
             context,
             currentBatteryParams,
             mDevice,
-            showConnectionNotificationEnabled,
-            notificationIslandStyleEnabled,
+            notificationSettings,
             isRfcommConnected
         )
     }
@@ -199,14 +198,7 @@ object RfcommController {
                 }
             }
             OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED -> {
-                showConnectionNotificationEnabled = intent.getBooleanExtra(
-                    OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
-                    showConnectionNotificationEnabled
-                )
-                notificationIslandStyleEnabled = intent.getBooleanExtra(
-                    OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
-                    notificationIslandStyleEnabled
-                )
+                notificationSettings = NotificationSettings.fromIntent(intent, notificationSettings)
                 Log.d(
                     TAG,
                     "Notification settings synced: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
@@ -292,8 +284,7 @@ object RfcommController {
             MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
                 context,
                 batteryParams,
-                showConnectionNotificationEnabled,
-                notificationIslandStyleEnabled
+                notificationSettings
             )
             mShowedConnectedToast = true
         }
@@ -302,8 +293,7 @@ object RfcommController {
                 context,
                 batteryParams,
                 mDevice,
-                showConnectionNotificationEnabled,
-                notificationIslandStyleEnabled,
+                notificationSettings,
                 isRfcommConnected
             )
         } else {
@@ -354,10 +344,7 @@ object RfcommController {
         gameModeImplementation = GameModeImplementation.fromPreference(
             mPrefs.getString(GameModeImplementation.PREF_KEY, null)
         )
-        showConnectionNotificationEnabled =
-            mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
-        notificationIslandStyleEnabled =
-            mPrefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
+        notificationSettings = NotificationSettings.fromPrefs(mPrefs)
         rfcommConnectionMethod = RfcommConnectionMethod.fromPreference(
             mPrefs.getString(RfcommConnectionMethod.PREF_KEY, null)
         )
@@ -634,6 +621,8 @@ object RfcommController {
             stopRoutesScan()
             cancelPodsNotificationByMiuiBt(context, device)
             Intent(OppoPodsAction.ACTION_PODS_DISCONNECTED).apply {
+                this.`package` = BuildConfig.APPLICATION_ID
+                this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                 context.sendBroadcast(this)
             }
             it.unregisterReceiver(broadcastReceiver)
@@ -805,6 +794,7 @@ object RfcommController {
     }
 
     fun connectAudio(context: Context, device: BluetoothDevice?) {
+        val targetDevice = device ?: return
         val bluetoothAdapter = context.getSystemService(BluetoothManager::class.java).adapter
 
         bluetoothAdapter?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
@@ -812,7 +802,7 @@ object RfcommController {
                 if (profile == BluetoothProfile.HEADSET) {
                     try {
                         val method = proxy.javaClass.getMethod("connect", BluetoothDevice::class.java)
-                        method.invoke(proxy, device)
+                        method.invoke(proxy, targetDevice)
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {
@@ -824,7 +814,7 @@ object RfcommController {
         }, BluetoothProfile.HEADSET)
 
         for (route in routes) {
-            if (route.type == MediaRoute2Info.TYPE_BLUETOOTH_A2DP && route.name == device!!.name) {
+            if (route.type == MediaRoute2Info.TYPE_BLUETOOTH_A2DP && route.name == targetDevice.name) {
                 Log.d(TAG, "found bt route $route")
                 mediaRouter.transferTo(route)
             }

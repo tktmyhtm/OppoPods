@@ -52,6 +52,7 @@ import moe.chenxy.oppopods.pods.GameModeImplementation
 import moe.chenxy.oppopods.pods.NoiseControlMode
 import moe.chenxy.oppopods.pods.RfcommConnectionMethod
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.NotificationSettings
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import top.yukonga.miuix.kmp.basic.Icon
@@ -110,10 +111,20 @@ fun MainUI(
         )
     }
     val showConnectionNotification = remember {
-        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true))
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
+                OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_NOTIFICATION
+            )
+        )
     }
     val notificationIslandStyle = remember {
-        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true))
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
+                OppoPodsPrefsKey.DEFAULT_NOTIFICATION_ISLAND_STYLE
+            )
+        )
     }
 
     val appController = remember { AppRfcommController() }
@@ -160,8 +171,9 @@ fun MainUI(
                     }
 
                     OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
-                        batteryParams.value =
-                            p1.getParcelableExtra("status", BatteryParams::class.java)!!
+                        p1.getParcelableExtra("status", BatteryParams::class.java)?.let {
+                            batteryParams.value = it
+                        }
                     }
 
                     OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED -> {
@@ -196,8 +208,11 @@ fun MainUI(
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
         }, Context.RECEIVER_EXPORTED)
 
-        context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT))
+        context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT).apply {
+            setPackage("com.android.bluetooth")
+        })
         context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            setPackage("com.android.bluetooth")
             putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
         })
 
@@ -223,6 +238,7 @@ fun MainUI(
         }
         Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
             this.putExtra("status", status)
+            setPackage("com.android.bluetooth")
             context.sendBroadcast(this)
         }
     }
@@ -235,6 +251,7 @@ fun MainUI(
         gameMode.value = enabled
         Intent(OppoPodsAction.ACTION_GAME_MODE_SET).apply {
             this.putExtra("enabled", enabled)
+            setPackage("com.android.bluetooth")
             context.sendBroadcast(this)
         }
     }
@@ -253,6 +270,7 @@ fun MainUI(
             appController.refreshStatus()
         } else if (hookConnected.value) {
             context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+                setPackage("com.android.bluetooth")
                 putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
             })
         }
@@ -262,11 +280,14 @@ fun MainUI(
         showConnectionNotificationEnabled: Boolean,
         notificationIslandStyleEnabled: Boolean
     ) {
+        val settings = NotificationSettings(
+            showConnectionNotificationEnabled,
+            notificationIslandStyleEnabled
+        )
         listOf("com.android.bluetooth", "com.xiaomi.bluetooth").forEach { targetPackage ->
             Intent(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED).apply {
                 setPackage(targetPackage)
-                putExtra(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, showConnectionNotificationEnabled)
-                putExtra(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, notificationIslandStyleEnabled)
+                settings.putExtras(this)
                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                 context.sendBroadcast(this)
             }
@@ -395,9 +416,13 @@ fun MainUI(
                         adaptiveMode.value = it
                         prefs.edit().putBoolean("adaptive_mode", it).apply()
                         // 广播 Adaptive 模式状态变更到蓝牙进程，确保跨进程实时同步
-                        Intent(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED).apply {
-                            putExtra("enabled", it)
-                            context.sendBroadcast(this)
+                        listOf("com.android.bluetooth", "com.xiaomi.bluetooth").forEach { targetPackage ->
+                            Intent(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED).apply {
+                                setPackage(targetPackage)
+                                putExtra("enabled", it)
+                                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                                context.sendBroadcast(this)
+                            }
                         }
                         // 关闭Adaptive模式时，若当前处于Adaptive模式则自动切换至降噪模式
                         if (!it && displayAnc == NoiseControlMode.ADAPTIVE) {
@@ -430,7 +455,7 @@ fun MainUI(
                         showConnectionNotification.value = it
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, it)
-                            .apply()
+                            .commit()
                         broadcastNotificationSettings(it, notificationIslandStyle.value)
                     },
                     notificationIslandStyle = notificationIslandStyle,
@@ -438,7 +463,7 @@ fun MainUI(
                         notificationIslandStyle.value = it
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, it)
-                            .apply()
+                            .commit()
                         broadcastNotificationSettings(showConnectionNotification.value, it)
                     }
                 )

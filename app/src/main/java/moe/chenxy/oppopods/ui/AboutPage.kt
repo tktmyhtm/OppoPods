@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.pods.GameModeImplementation
 import moe.chenxy.oppopods.pods.RfcommConnectionMethod
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -42,9 +43,11 @@ fun SettingsPage(
     onRfcommConnectionMethodChange: (RfcommConnectionMethod) -> Unit = {},
     gameModeImplementation: MutableState<GameModeImplementation> = mutableStateOf(GameModeImplementation.STANDARD),
     onGameModeImplementationChange: (GameModeImplementation) -> Unit = {},
-    showConnectionNotification: MutableState<Boolean> = mutableStateOf(true),
+    showConnectionNotification: MutableState<Boolean> =
+        mutableStateOf(OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_NOTIFICATION),
     onShowConnectionNotificationChange: (Boolean) -> Unit = {},
-    notificationIslandStyle: MutableState<Boolean> = mutableStateOf(true),
+    notificationIslandStyle: MutableState<Boolean> =
+        mutableStateOf(OppoPodsPrefsKey.DEFAULT_NOTIFICATION_ISLAND_STYLE),
     onNotificationIslandStyleChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current

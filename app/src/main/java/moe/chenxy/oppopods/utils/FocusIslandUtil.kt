@@ -14,7 +14,7 @@ import com.xzakota.hyper.notification.focus.FocusNotification
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 
-@SuppressLint("WrongConstant")
+@SuppressLint("WrongConstant", "MissingPermission", "NotificationPermission")
 object FocusIslandUtil {
     private const val TAG = "OppoPods-FocusIsland"
     private const val CHANNEL_ID = "oppopods_focus_island"

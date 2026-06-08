@@ -8,19 +8,13 @@
 -allowaccessmodification
 -overloadaggressively
 -renamesourcefileattribute SourceFile
+-keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations,InnerClasses,EnclosingMethod,Signature
 
-# Suppress missing class warnings from KavaRef (YukiHookAPI dependency)
--dontwarn java.lang.reflect.AnnotatedType
-
-# Keep Xposed entry point
+# Keep libxposed entry point. The class name is loaded from META-INF/xposed/java_init.list.
 -keep class moe.chenxy.oppopods.hook.HookEntry { *; }
--keep class moe.chenxy.oppopods.hook.HookEntry_YukiHookXposedInit { *; }
 
-# Keep all hooker classes (referenced by name in Xposed framework)
+# Hook classes run inside host processes and are reached from HookEntry at runtime.
 -keep class moe.chenxy.oppopods.hook.** { *; }
 
-# Keep YukiHookAPI generated classes
--keep class com.highcapable.yukihookapi.** { *; }
-
-# Keep Parcelable data classes (used in broadcast extras)
+# Parcelable/data classes are shared through broadcast extras across processes.
 -keep class moe.chenxy.oppopods.utils.miuiStrongToast.data.** { *; }
