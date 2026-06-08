@@ -386,10 +386,13 @@ object RfcommController {
 
         // Start persistent RFCOMM connection and battery polling
         CoroutineScope(Dispatchers.IO).launch {
-            delay(500)
-            if (connectRfcomm("initial connect")) {
-                // Initial status query (combo: battery wake + mode)
-                delay(300)
+            var initialConnected = connectRfcomm("initial connect")
+            if (!initialConnected) {
+                delay(500)
+                initialConnected = connectRfcomm("initial connect retry")
+            }
+
+            if (initialConnected) {
                 sendStatusQueryPackets()
 
                 if (autoGameModeEnabled) {
