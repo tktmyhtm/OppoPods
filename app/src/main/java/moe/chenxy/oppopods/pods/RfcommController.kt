@@ -138,7 +138,8 @@ object RfcommController {
             currentBatteryParams,
             mDevice,
             showConnectionNotificationEnabled,
-            notificationIslandStyleEnabled
+            notificationIslandStyleEnabled,
+            isRfcommConnected
         )
     }
 
@@ -165,7 +166,11 @@ object RfcommController {
                 setANCMode(status)
             }
             OppoPodsAction.ACTION_REFRESH_STATUS -> {
-                queryStatus()
+                val allowReconnect = intent.getBooleanExtra(
+                    OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT,
+                    false
+                )
+                queryStatus(allowReconnect)
             }
             OppoPodsAction.ACTION_GAME_MODE_SET -> {
                 val enabled = intent.getBooleanExtra("enabled", false)
@@ -298,7 +303,8 @@ object RfcommController {
                 batteryParams,
                 mDevice,
                 showConnectionNotificationEnabled,
-                notificationIslandStyleEnabled
+                notificationIslandStyleEnabled,
+                isRfcommConnected
             )
         } else {
             cancelPodsNotificationByMiuiBt(context, mDevice)
@@ -414,7 +420,7 @@ object RfcommController {
             while (isPodConnected) {
                 delay(BATTERY_POLL_INTERVAL_MS)
                 if (isPodConnected) {
-                    queryStatus()
+                    queryStatus(allowReconnect = false)
                 }
             }
         }
@@ -484,6 +490,7 @@ object RfcommController {
                 isRfcommConnected = true
                 startPacketReader(connectedSocket)
                 Log.d(TAG, "RFCOMM connected: reason=$reason")
+                refreshPodsNotification()
                 true
             } catch (e: IOException) {
                 Log.e(TAG, "RFCOMM connect failed: reason=$reason", e)
@@ -518,6 +525,7 @@ object RfcommController {
         synchronized(rfcommLock) {
             if (failedSocket == null || socket === failedSocket) {
                 closeRfcommSocketLocked()
+                refreshPodsNotification()
             }
         }
     }
@@ -650,11 +658,17 @@ object RfcommController {
         }
     }
 
-    private fun sendPacketSafe(packet: ByteArray, reason: String = "send packet"): Boolean {
-        if (!connectRfcomm(reason)) return false
+    private fun sendPacketSafe(
+        packet: ByteArray,
+        reason: String = "send packet",
+        allowReconnect: Boolean = true
+    ): Boolean {
+        if (allowReconnect) {
+            if (!connectRfcomm(reason)) return false
+        }
 
         val targetSocket = synchronized(rfcommLock) { socket } ?: run {
-            markRfcommDisconnected("socket missing before $reason")
+            Log.d(TAG, "Skip packet: RFCOMM disconnected and reconnect not allowed, reason=$reason")
             return false
         }
 
@@ -662,6 +676,7 @@ object RfcommController {
             return true
         }
 
+        if (!allowReconnect) return false
         if (!connectRfcomm("$reason retry")) return false
 
         val retrySocket = synchronized(rfcommLock) { socket } ?: return false
@@ -702,9 +717,9 @@ object RfcommController {
         }
     }
 
-    fun queryBattery() {
+    fun queryBattery(allowReconnect: Boolean = false) {
         CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(Enums.QUERY_BATTERY, "query battery")
+            sendPacketSafe(Enums.QUERY_BATTERY, "query battery", allowReconnect)
         }
     }
 
@@ -721,7 +736,7 @@ object RfcommController {
 
             delay(300)
             if (!isPodConnected) return
-            sendPacketSafe(Enums.QUERY_STATUS, "verify auto game mode")
+            sendPacketSafe(Enums.QUERY_STATUS, "verify auto game mode", allowReconnect = false)
 
             delay(if (attempt == 0) 700 else 1_500)
             if (lastGameModeStatusUpdateMs >= attemptStartedMs && currentGameMode) {
@@ -738,20 +753,20 @@ object RfcommController {
         }
     }
 
-    private suspend fun sendStatusQueryPackets() {
-        if (!sendPacketSafe(Enums.QUERY_STATUS, "query status")) return
+    private suspend fun sendStatusQueryPackets(allowReconnect: Boolean = false) {
+        if (!sendPacketSafe(Enums.QUERY_STATUS, "query status", allowReconnect)) return
         delay(50)
-        if (!sendPacketSafe(Enums.QUERY_BATTERY, "query battery")) return
+        if (!sendPacketSafe(Enums.QUERY_BATTERY, "query battery", allowReconnect)) return
         delay(50)
-        sendPacketSafe(Enums.QUERY_ANC, "query ANC")
+        sendPacketSafe(Enums.QUERY_ANC, "query ANC", allowReconnect)
     }
 
     /**
      * Combo query strategy: send batch query (wake + game mode), then battery, then ANC.
      */
-    fun queryStatus() {
+    fun queryStatus(allowReconnect: Boolean = false) {
         CoroutineScope(Dispatchers.IO).launch {
-            sendStatusQueryPackets()
+            sendStatusQueryPackets(allowReconnect)
         }
     }
 

@@ -197,6 +197,9 @@ fun MainUI(
         }, Context.RECEIVER_EXPORTED)
 
         context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT))
+        context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
+        })
 
         onDispose {
             try {
@@ -249,7 +252,9 @@ fun MainUI(
         if (isStandaloneConnected) {
             appController.refreshStatus()
         } else if (hookConnected.value) {
-            context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS))
+            context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+                putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
+            })
         }
     }
 

@@ -18,6 +18,7 @@ import moe.chenxy.oppopods.utils.SystemApisUtils.isHyperOS
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.IconParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.Left
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.Right
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.StringToastBean
@@ -119,13 +120,15 @@ object MiuiStrongToastUtil {
         batteryParams: BatteryParams,
         device: BluetoothDevice,
         showConnectionNotification: Boolean = true,
-        notificationIslandStyle: Boolean = true
+        notificationIslandStyle: Boolean = true,
+        rfcommConnected: Boolean = true
     ) {
         val intent = Intent("chen.action.oppopods.updatepodsnotification")
         intent.putExtra("batteryParams", batteryParams)
         intent.putExtra("device", device)
         intent.putExtra(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, showConnectionNotification)
         intent.putExtra(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, notificationIslandStyle)
+        intent.putExtra(OppoPodsAction.EXTRA_RFCOMM_CONNECTED, rfcommConnected)
         intent.`package` = "com.xiaomi.bluetooth"
         context.sendBroadcast(intent)
     }

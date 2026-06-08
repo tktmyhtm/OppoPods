@@ -40,6 +40,7 @@ object MiBluetoothToastHook : HookContext() {
         val notificationIslandState = mutableMapOf<String, Boolean>()
         var lastNotificationDevice: BluetoothDevice? = null
         var lastNotificationBatteryParams: BatteryParams? = null
+        var lastNotificationRfcommConnected: Boolean = true
 
         fun notificationTag(address: String, island: Boolean): String {
             return if (island) "BTHeadsetIsland$address" else "BTHeadset$address"
@@ -110,7 +111,8 @@ object MiBluetoothToastHook : HookContext() {
             bluetoothDevice: BluetoothDevice?,
             context: Context,
             batteryParams: BatteryParams,
-            showNotificationAsIsland: Boolean = shouldUseNotificationIslandStyle()
+            showNotificationAsIsland: Boolean = shouldUseNotificationIslandStyle(),
+            rfcommConnected: Boolean = true
         ) {
             val miheadset_notification_Box = context.resources.getIdentifier("miheadset_notification_Box", "string", "com.xiaomi.bluetooth")
             val miheadset_notification_LeftEar = context.resources.getIdentifier("miheadset_notification_LeftEar", "string", "com.xiaomi.bluetooth")
@@ -126,6 +128,11 @@ object MiBluetoothToastHook : HookContext() {
                 var alias: String? = bluetoothDevice.alias
                 if (alias?.isEmpty() == true) {
                     alias = bluetoothDevice.name
+                }
+                val notificationTitle = if (rfcommConnected) {
+                    alias ?: ""
+                } else {
+                    "${alias ?: ""}（已断开）"
                 }
 
                 val caseBattStr = if (batteryParams.case != null && batteryParams.case!!.isConnected)
@@ -190,7 +197,7 @@ object MiBluetoothToastHook : HookContext() {
                 val focusExtras = if (showNotificationAsIsland) FocusNotification.buildV3 {
                     val logo = createPicture("key_headset", headsetIcon)
                     enableFloat = true
-                    ticker = alias ?: ""
+                    ticker = notificationTitle
                     updatable = true
 //                    tickerPic = logo
 
@@ -199,7 +206,7 @@ object MiBluetoothToastHook : HookContext() {
                             type = 0
                             src = logo
                         }
-                        title = alias ?: ""
+                        title = notificationTitle
                         content = contentText
                     }
 
@@ -216,7 +223,7 @@ object MiBluetoothToastHook : HookContext() {
                             imageTextInfoRight {
                                 type = 2
                                 textInfo {
-                                    title = alias ?: ""
+                                    title = notificationTitle
                                     content = contentText
                                 }
                             }
@@ -275,9 +282,9 @@ object MiBluetoothToastHook : HookContext() {
                     Notification.Builder(context, channelId)
                         .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                         .setWhen(0L)
-                        .setTicker(alias)
+                        .setTicker(notificationTitle)
                         .setDefaults(-1)
-                        .setContentTitle(alias)
+                        .setContentTitle(notificationTitle)
                         .setContentText(contentText)
                         .setContentIntent(pendingIntent)
                         .setDeleteIntent(deleteIntent(context, bluetoothDevice))
@@ -291,6 +298,7 @@ object MiBluetoothToastHook : HookContext() {
                 notificationIslandState[address] = showNotificationAsIsland
                 lastNotificationDevice = bluetoothDevice
                 lastNotificationBatteryParams = batteryParams
+                lastNotificationRfcommConnected = rfcommConnected
             } catch (e: Exception) {
                 Log.e("OppoPods", "Failed to create Pod Notification", e)
             }
@@ -333,7 +341,8 @@ object MiBluetoothToastHook : HookContext() {
                                         device,
                                         context,
                                         batteryParams!!,
-                                        shouldUseIslandStyle(p1)
+                                        shouldUseIslandStyle(p1),
+                                        p1.getBooleanExtra(OppoPodsAction.EXTRA_RFCOMM_CONNECTED, true)
                                     )
                                 } else if (device != null) {
                                     cancelNotification(device, context)
@@ -363,7 +372,8 @@ object MiBluetoothToastHook : HookContext() {
                                         lastDevice,
                                         context,
                                         lastBatteryParams,
-                                        shouldUseNotificationIslandStyle()
+                                        shouldUseNotificationIslandStyle(),
+                                        lastNotificationRfcommConnected
                                     )
                                 }
                             } else if (p1?.action == OppoPodsAction.ACTION_CYCLE_ANC) {

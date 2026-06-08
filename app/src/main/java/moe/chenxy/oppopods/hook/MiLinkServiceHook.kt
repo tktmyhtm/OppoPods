@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.SystemClock
 import android.util.Log
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
@@ -16,6 +17,7 @@ object MiLinkServiceHook : HookContext() {
     private const val TAG = "OppoPods-MiLink"
     private const val FAKE_DEVICE_ID = "01010901"
     private const val PREFS_NAME = "oppopods_milink_state"
+    private const val PANEL_REFRESH_THROTTLE_MS = 5_000L
     private val knownOppoAddresses = linkedSetOf<String>()
     private var context: Context? = null
     private var receiverRegistered = false
@@ -23,6 +25,7 @@ object MiLinkServiceHook : HookContext() {
     private var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
     private var currentAnc = 1
+    private var lastPanelRefreshMs = 0L
 
     override fun onHook() {
         hookContextEntry()
@@ -70,26 +73,34 @@ object MiLinkServiceHook : HookContext() {
 
     private fun hookHeadsetRuntimeDisplay() {
         hookBluetoothDeviceResult("com.miui.headset.runtime.ProfileContext", "getDeviceId") { FAKE_DEVICE_ID }
-        hookBluetoothDeviceResult("com.miui.headset.runtime.ProfileContext", "getBatteryLevel") { miLinkBatteryLevels() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.ProfileContext", "getBatteryLevel", reconnectOnRead = true) { miLinkBatteryLevels() }
         hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getDeviceId") { FAKE_DEVICE_ID }
         hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getAncState") { miLinkAncState() }
-        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getBatteryLevelCache") { miLinkBatteryLevels() }
-        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getHeadsetPropertyBlock") { batteryPercentForMiLink() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getBatteryLevelCache", reconnectOnRead = true) { miLinkBatteryLevels() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getHeadsetPropertyBlock", reconnectOnRead = true) { batteryPercentForMiLink() }
         hookAncStateBlock()
         hookHeadsetInfoNoArg("getDeviceId") { FAKE_DEVICE_ID }
         hookHeadsetInfoNoArg("component3") { FAKE_DEVICE_ID }
-        hookHeadsetInfoNoArg("getPowers") { miLinkBatteryLevels() }
-        hookHeadsetInfoNoArg("component4") { miLinkBatteryLevels() }
+        hookHeadsetInfoNoArg("getPowers", reconnectOnRead = true) { miLinkBatteryLevels() }
+        hookHeadsetInfoNoArg("component4", reconnectOnRead = true) { miLinkBatteryLevels() }
         hookHeadsetInfoNoArg("getMode") { miLinkAncState() }
         hookHeadsetInfoNoArg("component5") { miLinkAncState() }
     }
 
-    private fun hookBluetoothDeviceResult(className: String, methodName: String, result: () -> Any) {
+    private fun hookBluetoothDeviceResult(
+        className: String,
+        methodName: String,
+        reconnectOnRead: Boolean = false,
+        result: () -> Any
+    ) {
         runCatching {
             hookAfter(findMethod(className, methodName, BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookAfter
                 if (!isOppoPod(device)) return@hookAfter
                 val old = this.result
+                if (reconnectOnRead) {
+                    requestPanelBluetoothStatus("$className.$methodName")
+                }
                 this.result = result()
                 if (className == "com.miui.headset.runtime.AncBatteryController" && methodName == "getHeadsetPropertyBlock") {
                     notifyHeadsetPropertyChanged(instance, device, 4)
@@ -146,11 +157,18 @@ object MiLinkServiceHook : HookContext() {
         }.onFailure { Log.w(TAG, "hook AncBatteryController.setAncStateBlock skipped", it) }
     }
 
-    private fun hookHeadsetInfoNoArg(methodName: String, result: () -> Any) {
+    private fun hookHeadsetInfoNoArg(
+        methodName: String,
+        reconnectOnRead: Boolean = false,
+        result: () -> Any
+    ) {
         runCatching {
             hookAfter(findMethodByParamCount("com.miui.headset.api.HeadsetInfo", methodName, 0)) {
                 if (!isTargetHeadsetInfo(instance)) return@hookAfter
                 val old = this.result
+                if (reconnectOnRead) {
+                    requestPanelBluetoothStatus("HeadsetInfo.$methodName")
+                }
                 this.result = result()
                 Log.d(TAG, "HeadsetInfo.$methodName forced old=$old new=${this.result}")
             }
@@ -194,11 +212,25 @@ object MiLinkServiceHook : HookContext() {
             }
         }, filter, Context.RECEIVER_EXPORTED)
         receiverRegistered = true
-        context?.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+        requestBluetoothStatus("receiver-register")
+        Log.d(TAG, "registered status receiver context=$context")
+    }
+
+    private fun requestPanelBluetoothStatus(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastPanelRefreshMs < PANEL_REFRESH_THROTTLE_MS) return
+        lastPanelRefreshMs = now
+        requestBluetoothStatus("panel-$reason", allowReconnect = true)
+    }
+
+    private fun requestBluetoothStatus(reason: String, allowReconnect: Boolean = false) {
+        val ctx = context ?: return
+        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, allowReconnect)
             setPackage("com.android.bluetooth")
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
-        Log.d(TAG, "registered status receiver context=$context")
+        Log.d(TAG, "requested bluetooth status reason=$reason allowReconnect=$allowReconnect")
     }
 
     private fun isOppoPod(device: BluetoothDevice): Boolean {

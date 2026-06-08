@@ -141,7 +141,9 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
         }, Context.RECEIVER_EXPORTED)
 
         context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT))
-        context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS))
+        context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
+        })
 
         onDispose {
             try { context.unregisterReceiver(broadcastReceiver) } catch (_: Exception) {}
@@ -156,7 +158,9 @@ private fun PopupContent(onMore: () -> Unit, onDone: () -> Unit) {
 
         while (true) {
             delay(15_000)
-            context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS))
+            context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+                putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
+            })
         }
     }
 
