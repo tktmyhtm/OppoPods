@@ -5,7 +5,9 @@ object OppoPodsPrefsKey {
     const val EAR_DETECTION_SWITCH_SPEAKER = "ear_detection_switch_speaker"
     const val SHOW_CONNECTION_NOTIFICATION = "show_connection_notification"
     const val NOTIFICATION_ISLAND_STYLE = "notification_island_style"
+    const val MILINK_HEADSET_CARD = "milink_headset_card"
 
     const val DEFAULT_SHOW_CONNECTION_NOTIFICATION = true
     const val DEFAULT_NOTIFICATION_ISLAND_STYLE = false
+    const val DEFAULT_MILINK_HEADSET_CARD = false
 }
