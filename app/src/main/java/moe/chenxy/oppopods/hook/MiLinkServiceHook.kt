@@ -12,6 +12,7 @@ import android.view.View
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
+import java.util.concurrent.CompletableFuture
 
 @SuppressLint("MissingPermission")
 object MiLinkServiceHook : HookContext() {
@@ -23,7 +24,6 @@ object MiLinkServiceHook : HookContext() {
     private const val FIND_RING_ACTIVE = 103
     private const val FIND_RING_RESULT_SUCCESS = 100
     private const val HEADSET_FIND_RING_CHANGED = 10
-    private const val DETACHED_STOP_SUPPRESSION_MS = 3_000L
     private val knownOppoAddresses = linkedSetOf<String>()
     private var context: Context? = null
     private var receiverRegistered = false
@@ -35,15 +35,14 @@ object MiLinkServiceHook : HookContext() {
     private var lastPanelRefreshMs = 0L
     private var lastHeadsetController: Any? = null
     private var lastHeadsetDevice: BluetoothDevice? = null
-    private var ignoreFindRingStopUntilMs = 0L
 
     override fun onHook() {
         hookContextEntry()
         hookMxBluetoothRuntime()
         hookHeadsetRuntimeDisplay()
+        hookFindRingControllerCommand()
         hookFindRingCommand()
         hookFindRingTitle()
-        hookFindRingCardDetach()
     }
 
     private fun hookContextEntry() {
@@ -211,6 +210,32 @@ object MiLinkServiceHook : HookContext() {
         }.onFailure { Log.w(TAG, "hook AncBatteryController.setFindRing skipped", it) }
     }
 
+    private fun hookFindRingControllerCommand() {
+        runCatching {
+            val headsetInfoClass = findClass("com.miui.circulate.api.service.CirculateServiceInfo")
+            val detailClass = findHeadSetsDetailClass()
+            val controllerClass = detailClass
+                ?.let { findHeadsetControllerClass(it, headsetInfoClass) }
+                ?: findClass("com.miui.circulate.api.protocol.headset.C4652c0")
+            val methods = controllerCommandMethods(controllerClass, headsetInfoClass)
+            if (methods.isEmpty()) {
+                Log.w(TAG, "hook headset controller setFindRing skipped: command method not found in ${controllerClass.name}")
+                return
+            }
+
+            methods.forEach { method ->
+                hookBefore(method) {
+                    val state = args[1] as? Int ?: return@hookBefore
+                    if (state == FIND_RING_IDLE && isHeadSetsDetailDetachCall()) {
+                        this.result = CompletableFuture.completedFuture(FIND_RING_RESULT_SUCCESS)
+                        Log.d(TAG, "HeadsetServiceController.${method.name} detach stop ignored")
+                    }
+                }
+                Log.d(TAG, "hooked headset controller command ${controllerClass.name}.${method.name}")
+            }
+        }.onFailure { Log.w(TAG, "hook headset controller command skipped", it) }
+    }
+
     private fun hookFindRingTitle() {
         val synergyViewClass = listOf(
             "com.miui.circulate.world.sticker.ui.SynergyView",
@@ -232,22 +257,6 @@ object MiLinkServiceHook : HookContext() {
                 Log.d(TAG, "SynergyView.setTitle replaced res=${resourceEntryName(view, resId)} title=$title")
             }
         }.onFailure { Log.w(TAG, "hook SynergyView.setTitle skipped", it) }
-    }
-
-    private fun hookFindRingCardDetach() {
-        runCatching {
-            hookBefore(findMethod("android.view.View", "onDetachedFromWindow")) {
-                val view = instance as? View ?: return@hookBefore
-                val viewName = resourceEntryName(view, view.id)
-                if (view.javaClass.name.endsWith(".HeadSetsDetail") ||
-                    viewName == "mi_audio_ringing_view" ||
-                    viewName == "audio_ringing_view"
-                ) {
-                    ignoreFindRingStopUntilMs = SystemClock.elapsedRealtime() + DETACHED_STOP_SUPPRESSION_MS
-                    Log.d(TAG, "find ring card detached; suppress stop until=$ignoreFindRingStopUntilMs view=${view.javaClass.name}/$viewName")
-                }
-            }
-        }.onFailure { Log.w(TAG, "hook View.onDetachedFromWindow skipped", it) }
     }
 
     private fun hookHeadsetInfoNoArg(
@@ -470,16 +479,56 @@ object MiLinkServiceHook : HookContext() {
     }
 
     private fun shouldIgnoreFindRingStop(): Boolean {
-        val now = SystemClock.elapsedRealtime()
-        if (now < ignoreFindRingStopUntilMs) return true
-        return Throwable().stackTrace.any { it.methodName == "onDetachedFromWindow" }
+        return isHeadSetsDetailDetachCall()
+    }
+
+    private fun findHeadSetsDetailClass(): Class<*>? {
+        return listOf(
+            "com.miui.circulateplus.world.headset.HeadSetsDetail",
+            "com.miui.circulate.world.headset.HeadSetsDetail",
+            "com.miui.circulate.world.detail.HeadSetsDetail"
+        ).firstNotNullOfOrNull { className ->
+            runCatching { findClass(className) }.getOrNull()
+        }
+    }
+
+    private fun findHeadsetControllerClass(detailClass: Class<*>, headsetInfoClass: Class<*>): Class<*>? {
+        runCatching {
+            detailClass.getDeclaredMethod("getHeadsetController").returnType
+        }.getOrNull()
+            ?.takeIf { hasHeadsetControllerCommandSignature(it, headsetInfoClass) }
+            ?.let { return it }
+
+        return detailClass.declaredFields
+            .map { it.type }
+            .firstOrNull { hasHeadsetControllerCommandSignature(it, headsetInfoClass) }
+    }
+
+    private fun hasHeadsetControllerCommandSignature(controllerClass: Class<*>, headsetInfoClass: Class<*>): Boolean {
+        return controllerCommandMethods(controllerClass, headsetInfoClass).isNotEmpty()
+    }
+
+    private fun controllerCommandMethods(controllerClass: Class<*>, headsetInfoClass: Class<*>): List<java.lang.reflect.Method> {
+        val intType = Int::class.javaPrimitiveType!!
+        return controllerClass.declaredMethods.filter { method ->
+            CompletableFuture::class.java.isAssignableFrom(method.returnType) &&
+                method.parameterTypes.size == 2 &&
+                method.parameterTypes[0] == headsetInfoClass &&
+                method.parameterTypes[1] == intType
+        }.onEach { it.isAccessible = true }
+    }
+
+    private fun isHeadSetsDetailDetachCall(): Boolean {
+        return Throwable().stackTrace.any {
+            it.className.endsWith(".HeadSetsDetail") && it.methodName == "onDetachedFromWindow"
+        }
     }
 
     private fun gameModeTitleReplacement(view: View, resId: Int): CharSequence? {
         val viewName = resourceEntryName(view, view.id)
         if (viewName != "mi_audio_ringing_view" && viewName != "audio_ringing_view") return null
         return when (resourceEntryName(view, resId)) {
-            "circulate_headset_control_audio_find_earphone" -> "游戏模式"
+            "circulate_headset_control_audio_find_earphone" -> "打开游戏模式"
             "circulate_headset_control_audio_stop_find_earphone" -> "关闭游戏模式"
             else -> null
         }
