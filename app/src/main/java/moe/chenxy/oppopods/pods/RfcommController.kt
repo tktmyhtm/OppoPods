@@ -121,6 +121,9 @@ object RfcommController {
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             mContext!!.sendBroadcast(this)
         }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED) {
+            putExtra("enabled", enabled)
+        }
     }
 
     private fun refreshPodsNotification() {
