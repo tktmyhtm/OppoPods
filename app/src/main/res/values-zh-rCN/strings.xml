@@ -55,7 +55,5 @@
     <string name="show_connection_notification_summary">耳机连接后显示电量通知</string>
     <string name="notification_island_style">将通知显示为超级岛样式</string>
     <string name="notification_island_style_summary">使用 HyperOS 焦点通知/超级岛样式展示连接通知</string>
-    <string name="milink_headset_card">使用 Milink 原生耳机卡片</string>
-    <string name="milink_headset_card_summary">连接时尝试拉起 Milink 自带的耳机连接卡片</string>
     <string name="notification_btn_disconnect">断开连接</string>
 </resources>

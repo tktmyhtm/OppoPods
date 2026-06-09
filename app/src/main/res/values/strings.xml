@@ -54,7 +54,5 @@
     <string name="show_connection_notification_summary">Show the headset battery notification after the earphones connect</string>
     <string name="notification_island_style">Show notification as Super Island</string>
     <string name="notification_island_style_summary">Use HyperOS Focus Island style for the connection notification</string>
-    <string name="milink_headset_card">Use MiLink headset card</string>
-    <string name="milink_headset_card_summary">Try the native MiLink headset connection card on connect</string>
     <string name="notification_btn_disconnect">Disconnect</string>
 </resources>

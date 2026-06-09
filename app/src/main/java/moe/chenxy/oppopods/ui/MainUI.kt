@@ -126,14 +126,6 @@ fun MainUI(
             )
         )
     }
-    val miLinkHeadsetCard = remember {
-        mutableStateOf(
-            prefs.getBoolean(
-                OppoPodsPrefsKey.MILINK_HEADSET_CARD,
-                OppoPodsPrefsKey.DEFAULT_MILINK_HEADSET_CARD
-            )
-        )
-    }
 
     val appController = remember { AppRfcommController() }
     val appConnState by appController.connectionState.collectAsState()
@@ -473,19 +465,6 @@ fun MainUI(
                             .putBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, it)
                             .commit()
                         broadcastNotificationSettings(showConnectionNotification.value, it)
-                    },
-                    miLinkHeadsetCard = miLinkHeadsetCard,
-                    onMiLinkHeadsetCardChange = {
-                        miLinkHeadsetCard.value = it
-                        prefs.edit()
-                            .putBoolean(OppoPodsPrefsKey.MILINK_HEADSET_CARD, it)
-                            .commit()
-                        Intent(OppoPodsAction.ACTION_MILINK_HEADSET_CARD_SETTINGS_CHANGED).apply {
-                            setPackage("com.milink.service")
-                            putExtra(OppoPodsPrefsKey.MILINK_HEADSET_CARD, it)
-                            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                            context.sendBroadcast(this)
-                        }
                     }
                 )
             }

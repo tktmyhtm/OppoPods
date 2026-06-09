@@ -11,7 +11,6 @@ import android.util.Log
 import android.view.View
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 import java.util.concurrent.CompletableFuture
 
@@ -33,7 +32,6 @@ object MiLinkServiceHook : HookContext() {
     private var currentBattery: BatteryParams = BatteryParams()
     private var currentAnc = 1
     private var currentGameMode = false
-    private var miLinkHeadsetCardEnabled = OppoPodsPrefsKey.DEFAULT_MILINK_HEADSET_CARD
     private var lastPanelRefreshMs = 0L
     private var lastHeadsetController: Any? = null
     private var lastHeadsetDevice: BluetoothDevice? = null
@@ -45,7 +43,6 @@ object MiLinkServiceHook : HookContext() {
         hookFindRingControllerCommand()
         hookFindRingCommand()
         hookFindRingTitle()
-        MiLinkHeadsetCardController.install(this)
     }
 
     private fun hookContextEntry() {
@@ -283,17 +280,12 @@ object MiLinkServiceHook : HookContext() {
     private fun registerStatusReceiver(ctx: Context?) {
         if (ctx == null || receiverRegistered) return
         context = ctx.applicationContext ?: ctx
-        miLinkHeadsetCardEnabled = prefs.getBoolean(
-            OppoPodsPrefsKey.MILINK_HEADSET_CARD,
-            OppoPodsPrefsKey.DEFAULT_MILINK_HEADSET_CARD
-        )
         val filter = IntentFilter().apply {
             addAction(OppoPodsAction.ACTION_PODS_CONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED)
-            addAction(OppoPodsAction.ACTION_MILINK_HEADSET_CARD_SETTINGS_CHANGED)
         }
         context?.registerReceiver(object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -302,26 +294,15 @@ object MiLinkServiceHook : HookContext() {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentName = intent.getStringExtra("device_name") ?: currentName
                         currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
-                        MiLinkHeadsetCardController.onPodsConnected(
-                            context ?: this@MiLinkServiceHook.context,
-                            currentAddress,
-                            currentName,
-                            miLinkHeadsetCardEnabled
-                        )
-                        if (miLinkHeadsetCardEnabled) {
-                            requestBluetoothStatus("milink-headset-card-connect", allowReconnect = true)
-                        }
                     }
                     OppoPodsAction.ACTION_PODS_DISCONNECTED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
-                        MiLinkHeadsetCardController.onPodsDisconnected(currentAddress)
                     }
                     OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
                         currentBattery = intent.parcelableStatus() ?: currentBattery
                         currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
                         saveState(context)
-                        MiLinkHeadsetCardController.onPodsBatteryChanged(currentAddress, currentName)
                     }
                     OppoPodsAction.ACTION_PODS_ANC_CHANGED -> {
                         currentAddress = intent.getStringExtra("address") ?: currentAddress
@@ -336,23 +317,8 @@ object MiLinkServiceHook : HookContext() {
                         saveState(context)
                         notifyFindRingChanged()
                     }
-                    OppoPodsAction.ACTION_MILINK_HEADSET_CARD_SETTINGS_CHANGED -> {
-                        miLinkHeadsetCardEnabled = intent.getBooleanExtra(
-                            OppoPodsPrefsKey.MILINK_HEADSET_CARD,
-                            miLinkHeadsetCardEnabled
-                        )
-                        MiLinkHeadsetCardController.setEnabled(miLinkHeadsetCardEnabled)
-                        if (miLinkHeadsetCardEnabled && currentAddress != null) {
-                            MiLinkHeadsetCardController.onPodsConnected(
-                                context ?: this@MiLinkServiceHook.context,
-                                currentAddress,
-                                currentName,
-                                true
-                            )
-                        }
-                    }
                 }
-                Log.d(TAG, "state action=${intent?.action} address=$currentAddress name=$currentName anc=$currentAnc gameMode=$currentGameMode miLinkCard=$miLinkHeadsetCardEnabled rawBattery=${currentBattery.debugString()} miLinkBattery=${miLinkBatteryLevels()}")
+                Log.d(TAG, "state action=${intent?.action} address=$currentAddress name=$currentName anc=$currentAnc gameMode=$currentGameMode rawBattery=${currentBattery.debugString()} miLinkBattery=${miLinkBatteryLevels()}")
             }
         }, filter, Context.RECEIVER_EXPORTED)
         receiverRegistered = true
@@ -376,24 +342,6 @@ object MiLinkServiceHook : HookContext() {
         })
         Log.d(TAG, "requested bluetooth status reason=$reason allowReconnect=$allowReconnect")
     }
-
-    fun rememberOppoHeadset(address: String?, name: String?, fallbackContext: Context? = null) {
-        fallbackContext?.let { context = it.applicationContext ?: it }
-        if (!address.isNullOrBlank()) {
-            currentAddress = address
-            knownOppoAddresses.add(address.uppercase())
-        }
-        if (!name.isNullOrBlank()) {
-            currentName = name
-        }
-        saveState(fallbackContext)
-    }
-
-    fun headsetCardBatteryLevels(): List<Int> = miLinkBatteryLevels()
-
-    fun headsetCardAncState(): Int = miLinkAncState()
-
-    fun headsetCardFindRingState(): Int = miLinkFindRingState()
 
     private fun isOppoPod(device: BluetoothDevice): Boolean {
         val address = runCatching { device.address }.getOrNull()

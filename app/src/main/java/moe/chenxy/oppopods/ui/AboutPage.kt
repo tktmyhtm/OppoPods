@@ -48,10 +48,7 @@ fun SettingsPage(
     onShowConnectionNotificationChange: (Boolean) -> Unit = {},
     notificationIslandStyle: MutableState<Boolean> =
         mutableStateOf(OppoPodsPrefsKey.DEFAULT_NOTIFICATION_ISLAND_STYLE),
-    onNotificationIslandStyleChange: (Boolean) -> Unit = {},
-    miLinkHeadsetCard: MutableState<Boolean> =
-        mutableStateOf(OppoPodsPrefsKey.DEFAULT_MILINK_HEADSET_CARD),
-    onMiLinkHeadsetCardChange: (Boolean) -> Unit = {}
+    onNotificationIslandStyleChange: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val showHeyTapWarning = remember { mutableStateOf(false) }
@@ -131,12 +128,6 @@ fun SettingsPage(
                     checked = notificationIslandStyle.value,
                     onCheckedChange = { onNotificationIslandStyleChange(it) },
                     enabled = showConnectionNotification.value
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.milink_headset_card),
-                    summary = stringResource(R.string.milink_headset_card_summary),
-                    checked = miLinkHeadsetCard.value,
-                    onCheckedChange = { onMiLinkHeadsetCardChange(it) }
                 )
                 SwitchPreference(
                     title = stringResource(R.string.open_heytap),
