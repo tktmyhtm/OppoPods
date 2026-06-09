@@ -679,7 +679,13 @@ object RfcommController {
 
     fun setGameMode(enabled: Boolean) {
         Log.d(TAG, "setGameMode: $enabled")
+        if (currentGameMode == enabled) {
+            changeUIGameModeStatus(enabled)
+            Log.d(TAG, "setGameMode skipped duplicate: $enabled")
+            return
+        }
         currentGameMode = enabled
+        changeUIGameModeStatus(enabled)
         CoroutineScope(Dispatchers.IO).launch {
             sendGameModePackets(enabled)
         }

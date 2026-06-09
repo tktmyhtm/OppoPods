@@ -23,6 +23,7 @@ object MiLinkServiceHook : HookContext() {
     private const val FIND_RING_ACTIVE = 103
     private const val FIND_RING_RESULT_SUCCESS = 100
     private const val HEADSET_FIND_RING_CHANGED = 10
+    private const val DETACHED_STOP_SUPPRESSION_MS = 3_000L
     private val knownOppoAddresses = linkedSetOf<String>()
     private var context: Context? = null
     private var receiverRegistered = false
@@ -34,6 +35,7 @@ object MiLinkServiceHook : HookContext() {
     private var lastPanelRefreshMs = 0L
     private var lastHeadsetController: Any? = null
     private var lastHeadsetDevice: BluetoothDevice? = null
+    private var ignoreFindRingStopUntilMs = 0L
 
     override fun onHook() {
         hookContextEntry()
@@ -41,6 +43,7 @@ object MiLinkServiceHook : HookContext() {
         hookHeadsetRuntimeDisplay()
         hookFindRingCommand()
         hookFindRingTitle()
+        hookFindRingCardDetach()
     }
 
     private fun hookContextEntry() {
@@ -184,18 +187,26 @@ object MiLinkServiceHook : HookContext() {
                 }
                 rememberHeadsetController("com.miui.headset.runtime.AncBatteryController", instance, device)
 
-                if (state == FIND_RING_IDLE && isDetachStopFindRingCall()) {
+                if (state == FIND_RING_IDLE && shouldIgnoreFindRingStop()) {
                     this.result = FIND_RING_RESULT_SUCCESS
-                    Log.d(TAG, "AncBatteryController.setFindRing detach stop ignored address=${device.address}")
+                    Log.d(TAG, "AncBatteryController.setFindRing lifecycle stop ignored address=${device.address}")
                     return@hookBefore
                 }
 
-                currentGameMode = state != FIND_RING_IDLE
-                sendOppoGameMode(currentGameMode, instanceContext)
+                val enabled = state != FIND_RING_IDLE
+                if (enabled == currentGameMode) {
+                    notifyFindRingChanged(instance, device)
+                    this.result = FIND_RING_RESULT_SUCCESS
+                    Log.d(TAG, "AncBatteryController.setFindRing duplicate ignored address=${device.address} state=$state gameMode=$currentGameMode")
+                    return@hookBefore
+                }
+
+                currentGameMode = enabled
+                sendOppoGameMode(enabled, instanceContext)
                 saveState(instanceContext)
-                notifyFindRingChanged()
+                notifyFindRingChanged(instance, device)
                 this.result = FIND_RING_RESULT_SUCCESS
-                Log.d(TAG, "AncBatteryController.setFindRing handled address=${device.address} state=$state gameMode=$currentGameMode")
+                Log.d(TAG, "AncBatteryController.setFindRing handled address=${device.address} state=$state gameMode=$enabled")
             }
         }.onFailure { Log.w(TAG, "hook AncBatteryController.setFindRing skipped", it) }
     }
@@ -221,6 +232,22 @@ object MiLinkServiceHook : HookContext() {
                 Log.d(TAG, "SynergyView.setTitle replaced res=${resourceEntryName(view, resId)} title=$title")
             }
         }.onFailure { Log.w(TAG, "hook SynergyView.setTitle skipped", it) }
+    }
+
+    private fun hookFindRingCardDetach() {
+        runCatching {
+            hookBefore(findMethod("android.view.View", "onDetachedFromWindow")) {
+                val view = instance as? View ?: return@hookBefore
+                val viewName = resourceEntryName(view, view.id)
+                if (view.javaClass.name.endsWith(".HeadSetsDetail") ||
+                    viewName == "mi_audio_ringing_view" ||
+                    viewName == "audio_ringing_view"
+                ) {
+                    ignoreFindRingStopUntilMs = SystemClock.elapsedRealtime() + DETACHED_STOP_SUPPRESSION_MS
+                    Log.d(TAG, "find ring card detached; suppress stop until=$ignoreFindRingStopUntilMs view=${view.javaClass.name}/$viewName")
+                }
+            }
+        }.onFailure { Log.w(TAG, "hook View.onDetachedFromWindow skipped", it) }
     }
 
     private fun hookHeadsetInfoNoArg(
@@ -431,9 +458,8 @@ object MiLinkServiceHook : HookContext() {
         Log.d(TAG, "sendMiLinkAncChanged broadcast sent mode=$mode")
     }
 
-    private fun notifyFindRingChanged() {
-        val controller = lastHeadsetController ?: return
-        val device = lastHeadsetDevice ?: return
+    private fun notifyFindRingChanged(controller: Any? = lastHeadsetController, device: BluetoothDevice? = lastHeadsetDevice) {
+        if (controller == null || device == null) return
         notifyHeadsetPropertyChanged(controller, device, HEADSET_FIND_RING_CHANGED)
     }
 
@@ -443,7 +469,9 @@ object MiLinkServiceHook : HookContext() {
         lastHeadsetDevice = device
     }
 
-    private fun isDetachStopFindRingCall(): Boolean {
+    private fun shouldIgnoreFindRingStop(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now < ignoreFindRingStopUntilMs) return true
         return Throwable().stackTrace.any { it.methodName == "onDetachedFromWindow" }
     }
 
