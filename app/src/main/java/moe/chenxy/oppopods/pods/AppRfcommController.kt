@@ -58,7 +58,6 @@ class AppRfcommController {
 
     fun connect(
         device: BluetoothDevice,
-        autoGameMode: Boolean = false,
         connectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID,
         gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
     ) {
@@ -82,9 +81,6 @@ class AppRfcommController {
                 delay(300)
                 queryStatus()
 
-                if (autoGameMode) {
-                    enableGameModeOnConnect()
-                }
                 startBatteryPolling()
             } catch (e: IOException) {
                 Log.e(TAG, "RFCOMM connect failed", e)
@@ -236,28 +232,6 @@ class AppRfcommController {
             sendPacket(Enums.QUERY_BATTERY)
             delay(50)
             sendPacket(Enums.QUERY_ANC)
-        }
-    }
-
-    private suspend fun enableGameModeOnConnect() {
-        delay(500)
-        repeat(3) { attempt ->
-            if (!isConnected) return
-
-            val attemptStartedMs = SystemClock.elapsedRealtime()
-            Log.d(TAG, "Auto game mode: enabling after connect, attempt=${attempt + 1}, implementation=$gameModeImplementation")
-            _gameMode.value = true
-            sendGameModePackets(true)
-
-            delay(300)
-            if (!isConnected) return
-            sendPacket(Enums.QUERY_STATUS)
-
-            delay(if (attempt == 0) 700 else 1_500)
-            if (lastGameModeStatusUpdateMs >= attemptStartedMs && _gameMode.value) {
-                return
-            }
-            Log.d(TAG, "Auto game mode: attempt ${attempt + 1} did not verify, retrying")
         }
     }
 

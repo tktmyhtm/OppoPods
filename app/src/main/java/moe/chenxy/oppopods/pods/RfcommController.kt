@@ -64,7 +64,6 @@ object RfcommController {
     lateinit var currentBatteryParams: BatteryParams
     private var currentAnc: Int = 1
     private var currentGameMode: Boolean = false
-    private var autoGameModeEnabled: Boolean = false
     private var gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
     private var rfcommConnectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID
     private var lastGameModeStatusUpdateMs: Long = 0L
@@ -184,10 +183,6 @@ object RfcommController {
             OppoPodsAction.ACTION_GAME_MODE_SET -> {
                 val enabled = intent.getBooleanExtra("enabled", false)
                 setGameMode(enabled)
-            }
-            OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED -> {
-                autoGameModeEnabled = intent.getBooleanExtra("enabled", autoGameModeEnabled)
-                Log.d(TAG, "Auto game mode synced: $autoGameModeEnabled")
             }
             OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED -> {
                 gameModeImplementation = GameModeImplementation.fromPreference(
@@ -382,7 +377,6 @@ object RfcommController {
         cachedDeviceName = device.name ?: ""
         // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
         adaptiveModeEnabled = mPrefs.getBoolean("adaptive_mode", true)
-        autoGameModeEnabled = mPrefs.getBoolean("auto_game_mode", false)
         gameModeImplementation = GameModeImplementation.fromPreference(
             mPrefs.getString(GameModeImplementation.PREF_KEY, null)
         )
@@ -395,7 +389,6 @@ object RfcommController {
             TAG,
             "Notification settings initial: batteryIsland=$showConnectionBatteryIslandEnabled, popup=$showConnectionPopupEnabled, popupDismiss=${connectionPopupDismissSeconds}s, show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
         )
-        Log.d(TAG, "Auto game mode initial: $autoGameModeEnabled")
         Log.d(TAG, "Game mode implementation initial: ${gameModeImplementation.preferenceValue}")
         Log.d(TAG, "RFCOMM connection method initial: ${rfcommConnectionMethod.preferenceValue}")
 
@@ -404,7 +397,6 @@ object RfcommController {
             this.addAction(OppoPodsAction.ACTION_PODS_UI_INIT)
             this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
-            this.addAction(OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED)
             this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
             this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
@@ -437,10 +429,6 @@ object RfcommController {
 
             if (initialConnected) {
                 sendStatusQueryPackets()
-
-                if (autoGameModeEnabled) {
-                    enableGameModeOnConnect()
-                }
             } else {
                 Log.w(TAG, "Initial RFCOMM connect failed; will retry on the next control/query operation")
             }
@@ -760,29 +748,6 @@ object RfcommController {
     fun queryBattery(allowReconnect: Boolean = false) {
         CoroutineScope(Dispatchers.IO).launch {
             sendPacketSafe(Enums.QUERY_BATTERY, "query battery", allowReconnect)
-        }
-    }
-
-    private suspend fun enableGameModeOnConnect() {
-        delay(500)
-        repeat(3) { attempt ->
-            if (!isPodConnected || mContext == null) return
-
-            val attemptStartedMs = SystemClock.elapsedRealtime()
-            Log.d(TAG, "Auto game mode: enabling after connect, attempt=${attempt + 1}, implementation=$gameModeImplementation")
-            currentGameMode = true
-            changeUIGameModeStatus(true)
-            sendGameModePackets(true)
-
-            delay(300)
-            if (!isPodConnected) return
-            sendPacketSafe(Enums.QUERY_STATUS, "verify auto game mode", allowReconnect = false)
-
-            delay(if (attempt == 0) 700 else 1_500)
-            if (lastGameModeStatusUpdateMs >= attemptStartedMs && currentGameMode) {
-                return
-            }
-            Log.d(TAG, "Auto game mode: attempt ${attempt + 1} did not verify, retrying")
         }
     }
 

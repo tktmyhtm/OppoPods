@@ -10,7 +10,7 @@ object OppoPodsPrefsKey {
     const val NOTIFICATION_ISLAND_STYLE = "notification_island_style"
 
     const val DEFAULT_SHOW_CONNECTION_BATTERY_ISLAND = true
-    const val DEFAULT_SHOW_CONNECTION_POPUP = true
+    const val DEFAULT_SHOW_CONNECTION_POPUP = false
     const val DEFAULT_CONNECTION_POPUP_DISMISS_SECONDS = 8
     val CONNECTION_POPUP_DISMISS_SECOND_OPTIONS = listOf(3, 5, 8, 10, 15, 30)
     const val DEFAULT_SHOW_CONNECTION_NOTIFICATION = true

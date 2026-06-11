@@ -73,6 +73,8 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 sealed interface Screen : NavKey {
     data object Home : Screen
     data object Settings : Screen
+    data object AdvancedSettings : Screen
+    data object About : Screen
 }
 
 @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
@@ -90,9 +92,7 @@ fun MainUI(
     val hookConnected = remember { mutableStateOf(false) }
     val gameMode = remember { mutableStateOf(false) }
 
-    // Auto game mode preference (persisted)
     val prefs = remember { context.getSharedPreferences("oppopods_settings", Context.MODE_PRIVATE) }
-    val autoGameMode = remember { mutableStateOf(prefs.getBoolean("auto_game_mode", false)) }
     val openHeyTap = remember { mutableStateOf(prefs.getBoolean("open_heytap", false)) }
     // Adaptive模式偏好设置（持久化存储），默认开启
     val adaptiveMode = remember { mutableStateOf(prefs.getBoolean("adaptive_mode", true)) }
@@ -284,7 +284,6 @@ fun MainUI(
     fun onDeviceSelected(device: BluetoothDevice) {
         appController.connect(
             device = device,
-            autoGameMode = autoGameMode.value,
             connectionMethod = rfcommConnectionMethod.value,
             gameModeImplementation = gameModeImplementation.value
         )
@@ -426,22 +425,6 @@ fun MainUI(
                     contentPadding = padding,
                     themeMode = themeMode,
                     onThemeModeChange = onThemeModeChange,
-                    autoGameMode = autoGameMode,
-                    onAutoGameModeChange = {
-                        autoGameMode.value = it
-                        prefs.edit().putBoolean("auto_game_mode", it).apply()
-                        Intent(OppoPodsAction.ACTION_AUTO_GAME_MODE_CHANGED).apply {
-                            setPackage("com.android.bluetooth")
-                            putExtra("enabled", it)
-                            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                            context.sendBroadcast(this)
-                        }
-                    },
-                    openHeyTap = openHeyTap,
-                    onOpenHeyTapChange = {
-                        openHeyTap.value = it
-                        prefs.edit().putBoolean("open_heytap", it).apply()
-                    },
                     adaptiveMode = adaptiveMode,
                     onAdaptiveModeChange = {
                         adaptiveMode.value = it
@@ -460,27 +443,6 @@ fun MainUI(
                             setAncMode(NoiseControlMode.NOISE_CANCELLATION)
                         }
                     },
-                    rfcommConnectionMethod = rfcommConnectionMethod,
-                    onRfcommConnectionMethodChange = {
-                        rfcommConnectionMethod.value = it
-                        prefs.edit()
-                            .putString(RfcommConnectionMethod.PREF_KEY, it.preferenceValue)
-                            .apply()
-                    },
-                    gameModeImplementation = gameModeImplementation,
-                    onGameModeImplementationChange = {
-                        gameModeImplementation.value = it
-                        appController.setGameModeImplementation(it)
-                        prefs.edit()
-                            .putString(GameModeImplementation.PREF_KEY, it.preferenceValue)
-                            .apply()
-                        Intent(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED).apply {
-                            setPackage("com.android.bluetooth")
-                            putExtra(GameModeImplementation.PREF_KEY, it.preferenceValue)
-                            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                            context.sendBroadcast(this)
-                        }
-                    },
                     showConnectionBatteryIsland = showConnectionBatteryIsland,
                     onShowConnectionBatteryIslandChange = {
                         showConnectionBatteryIsland.value = it
@@ -491,34 +453,6 @@ fun MainUI(
                             it,
                             showConnectionPopup.value,
                             connectionPopupDismissSeconds.value,
-                            showConnectionNotification.value,
-                            notificationIslandStyle.value
-                        )
-                    },
-                    showConnectionPopup = showConnectionPopup,
-                    onShowConnectionPopupChange = {
-                        showConnectionPopup.value = it
-                        prefs.edit()
-                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_POPUP, it)
-                            .commit()
-                        broadcastNotificationSettings(
-                            showConnectionBatteryIsland.value,
-                            it,
-                            connectionPopupDismissSeconds.value,
-                            showConnectionNotification.value,
-                            notificationIslandStyle.value
-                        )
-                    },
-                    connectionPopupDismissSeconds = connectionPopupDismissSeconds,
-                    onConnectionPopupDismissSecondsChange = {
-                        connectionPopupDismissSeconds.value = it
-                        prefs.edit()
-                            .putInt(OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS, it)
-                            .commit()
-                        broadcastNotificationSettings(
-                            showConnectionBatteryIsland.value,
-                            showConnectionPopup.value,
-                            it,
                             showConnectionNotification.value,
                             notificationIslandStyle.value
                         )
@@ -550,9 +484,100 @@ fun MainUI(
                             showConnectionNotification.value,
                             it
                         )
+                    },
+                    onOpenAdvancedSettings = { backStack.add(Screen.AdvancedSettings) },
+                    onOpenAbout = { backStack.add(Screen.About) }
+                )
+            }
+        }
+        entry<Screen.AdvancedSettings> {
+            val advancedScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = stringResource(R.string.advanced_settings),
+                        largeTitle = stringResource(R.string.advanced_settings),
+                        scrollBehavior = advancedScrollBehavior,
+                        navigationIcon = {
+                            IconButton(
+                                onClick = { backStack.removeLast() },
+                            ) {
+                                Icon(
+                                    imageVector = MiuixIcons.Back,
+                                    contentDescription = "Back"
+                                )
+                            }
+                        }
+                    )
+                }
+            ) { padding ->
+                AdvancedSettingsPage(
+                    modifier = Modifier
+                        .overScrollVertical()
+                        .nestedScroll(advancedScrollBehavior.nestedScrollConnection),
+                    contentPadding = padding,
+                    openHeyTap = openHeyTap,
+                    onOpenHeyTapChange = {
+                        openHeyTap.value = it
+                        prefs.edit().putBoolean("open_heytap", it).apply()
+                    },
+                    rfcommConnectionMethod = rfcommConnectionMethod,
+                    onRfcommConnectionMethodChange = {
+                        rfcommConnectionMethod.value = it
+                        prefs.edit()
+                            .putString(RfcommConnectionMethod.PREF_KEY, it.preferenceValue)
+                            .apply()
+                    },
+                    gameModeImplementation = gameModeImplementation,
+                    onGameModeImplementationChange = {
+                        gameModeImplementation.value = it
+                        appController.setGameModeImplementation(it)
+                        prefs.edit()
+                            .putString(GameModeImplementation.PREF_KEY, it.preferenceValue)
+                            .apply()
+                        Intent(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED).apply {
+                            setPackage("com.android.bluetooth")
+                            putExtra(GameModeImplementation.PREF_KEY, it.preferenceValue)
+                            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                            context.sendBroadcast(this)
+                        }
+                    },
+                    showConnectionPopup = showConnectionPopup,
+                    onShowConnectionPopupChange = {
+                        showConnectionPopup.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_POPUP, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            it,
+                            connectionPopupDismissSeconds.value,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
+                    },
+                    connectionPopupDismissSeconds = connectionPopupDismissSeconds,
+                    onConnectionPopupDismissSecondsChange = {
+                        connectionPopupDismissSeconds.value = it
+                        prefs.edit()
+                            .putInt(OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            showConnectionPopup.value,
+                            it,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
                     }
                 )
             }
+        }
+        entry<Screen.About> {
+            AboutPage(
+                onBack = { backStack.removeLast() }
+            )
         }
     }
 

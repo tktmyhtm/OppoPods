@@ -22,8 +22,8 @@ android {
         applicationId = "moe.chenxy.oppopods"
         minSdk = 35
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.0.6"
+        versionCode = 8
+        versionName = "1.1.0"
     }
 
     buildTypes {
@@ -100,6 +100,7 @@ dependencies {
     implementation(libs.miuix)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
+    implementation(libs.miuix.blur)
     implementation(libs.miuix.navigation3.ui)
 
     // Navigation3
