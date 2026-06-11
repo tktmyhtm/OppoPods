@@ -69,7 +69,7 @@ object MiBluetoothToastHook : HookContext() {
             notificationSettings = NotificationSettings.fromIntent(intent, notificationSettings)
             Log.d(
                 "OppoPods",
-                "Notification settings synced in MiBluetooth: show=${notificationSettings.showConnectionNotification}, island=${notificationSettings.notificationIslandStyle}"
+                "Notification settings synced in MiBluetooth: batteryIsland=${notificationSettings.showConnectionBatteryIsland}, popup=${notificationSettings.showConnectionPopup}, popupDismiss=${notificationSettings.connectionPopupDismissSeconds}s, show=${notificationSettings.showConnectionNotification}, island=${notificationSettings.notificationIslandStyle}"
             )
         }
 

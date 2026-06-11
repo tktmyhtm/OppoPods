@@ -43,6 +43,15 @@ fun SettingsPage(
     onRfcommConnectionMethodChange: (RfcommConnectionMethod) -> Unit = {},
     gameModeImplementation: MutableState<GameModeImplementation> = mutableStateOf(GameModeImplementation.STANDARD),
     onGameModeImplementationChange: (GameModeImplementation) -> Unit = {},
+    showConnectionBatteryIsland: MutableState<Boolean> =
+        mutableStateOf(OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_BATTERY_ISLAND),
+    onShowConnectionBatteryIslandChange: (Boolean) -> Unit = {},
+    showConnectionPopup: MutableState<Boolean> =
+        mutableStateOf(OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_POPUP),
+    onShowConnectionPopupChange: (Boolean) -> Unit = {},
+    connectionPopupDismissSeconds: MutableState<Int> =
+        mutableStateOf(OppoPodsPrefsKey.DEFAULT_CONNECTION_POPUP_DISMISS_SECONDS),
+    onConnectionPopupDismissSecondsChange: (Int) -> Unit = {},
     showConnectionNotification: MutableState<Boolean> =
         mutableStateOf(OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_NOTIFICATION),
     onShowConnectionNotificationChange: (Boolean) -> Unit = {},
@@ -65,6 +74,14 @@ fun SettingsPage(
         stringResource(R.string.game_mode_implementation_standard),
         stringResource(R.string.game_mode_implementation_compatible)
     )
+    val popupDismissSecondOptions = OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECOND_OPTIONS
+    val popupDismissSecondLabels = popupDismissSecondOptions.map {
+        stringResource(R.string.connection_popup_duration_seconds, it)
+    }
+    val popupDismissSecondSelectedIndex = popupDismissSecondOptions
+        .indexOf(connectionPopupDismissSeconds.value)
+        .takeIf { it >= 0 }
+        ?: popupDismissSecondOptions.indexOf(OppoPodsPrefsKey.DEFAULT_CONNECTION_POPUP_DISMISS_SECONDS)
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -114,6 +131,26 @@ fun SettingsPage(
                     selectedIndex = GameModeImplementation.selectedIndexOf(gameModeImplementation.value),
                     onSelectedIndexChange = {
                         onGameModeImplementationChange(GameModeImplementation.fromSelectedIndex(it))
+                    }
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.show_connection_battery_island),
+                    summary = stringResource(R.string.show_connection_battery_island_summary),
+                    checked = showConnectionBatteryIsland.value,
+                    onCheckedChange = { onShowConnectionBatteryIslandChange(it) }
+                )
+                SwitchPreference(
+                    title = stringResource(R.string.show_connection_popup),
+                    summary = stringResource(R.string.show_connection_popup_summary),
+                    checked = showConnectionPopup.value,
+                    onCheckedChange = { onShowConnectionPopupChange(it) }
+                )
+                OverlayDropdownPreference(
+                    title = stringResource(R.string.connection_popup_dismiss_duration),
+                    items = popupDismissSecondLabels,
+                    selectedIndex = popupDismissSecondSelectedIndex,
+                    onSelectedIndexChange = {
+                        onConnectionPopupDismissSecondsChange(popupDismissSecondOptions[it])
                     }
                 )
                 SwitchPreference(

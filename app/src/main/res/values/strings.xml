@@ -50,6 +50,15 @@
     <string name="cycle_anc">Cycle ANC</string>
     <string name="adaptive_mode">Adaptive Mode</string>
     <string name="adaptive_mode_summary">Enable Adaptive noise control mode for compatible earphones</string>
+    <string name="show_connection_battery_island">Show battery island on connect</string>
+    <string name="show_connection_battery_island_summary">Briefly show left and right ear battery in Focus Island after connection</string>
+    <string name="show_connection_popup">Show popup on connect</string>
+    <string name="show_connection_popup_summary">Show the connection battery popup after the earphones connect</string>
+    <string name="connection_popup_dismiss_duration">Popup auto-dismiss time</string>
+    <string name="connection_popup_duration_seconds">%1$d s</string>
+    <string name="connection_popup_left_ear">Left ear</string>
+    <string name="connection_popup_right_ear">Right ear</string>
+    <string name="connection_popup_case">Case</string>
     <string name="show_connection_notification">Show notification on connect</string>
     <string name="show_connection_notification_summary">Show the headset battery notification after the earphones connect</string>
     <string name="notification_island_style">Show notification as Super Island</string>

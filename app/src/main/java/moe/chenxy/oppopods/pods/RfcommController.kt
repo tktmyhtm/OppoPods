@@ -29,6 +29,7 @@ import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil.cancelPodsN
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.NotificationSettings
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 import java.io.IOException
 import android.content.SharedPreferences
@@ -70,6 +71,12 @@ object RfcommController {
     // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
     private var adaptiveModeEnabled: Boolean = true
     private var notificationSettings: NotificationSettings = NotificationSettings()
+    private val showConnectionBatteryIslandEnabled: Boolean
+        get() = notificationSettings.showConnectionBatteryIsland
+    private val showConnectionPopupEnabled: Boolean
+        get() = notificationSettings.showConnectionPopup
+    private val connectionPopupDismissSeconds: Int
+        get() = notificationSettings.connectionPopupDismissSeconds
     private val showConnectionNotificationEnabled: Boolean
         get() = notificationSettings.showConnectionNotification
     private val notificationIslandStyleEnabled: Boolean
@@ -204,7 +211,7 @@ object RfcommController {
                 notificationSettings = NotificationSettings.fromIntent(intent, notificationSettings)
                 Log.d(
                     TAG,
-                    "Notification settings synced: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+                    "Notification settings synced: batteryIsland=$showConnectionBatteryIslandEnabled, popup=$showConnectionPopupEnabled, popupDismiss=${connectionPopupDismissSeconds}s, show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
                 )
                 refreshPodsNotification()
             }
@@ -284,11 +291,16 @@ object RfcommController {
         currentBatteryParams = batteryParams
 
         if (shouldShowToast) {
-            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
-                context,
-                batteryParams
-            )
             mShowedConnectedToast = true
+            if (showConnectionBatteryIslandEnabled) {
+                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
+                    context,
+                    batteryParams
+                )
+            }
+            if (showConnectionPopupEnabled) {
+                showConnectionPopup(context, batteryParams)
+            }
         }
         if (showConnectionNotificationEnabled) {
             MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
@@ -312,6 +324,34 @@ object RfcommController {
         else SystemApisUtils.BATTERY_LEVEL_UNKNOWN
 
         setRegularBatteryLevel(lastTempBatt)
+    }
+
+    private fun showConnectionPopup(context: Context, batteryParams: BatteryParams) {
+        try {
+            Intent().apply {
+                setClassName(BuildConfig.APPLICATION_ID, "moe.chenxy.oppopods.ConnectionPopupActivity")
+                putExtra("status", batteryParams)
+                putExtra("device_name", currentDeviceDisplayName())
+                putExtra(
+                    OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS,
+                    connectionPopupDismissSeconds
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                context.startActivity(this)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show connection popup", e)
+        }
+    }
+
+    private fun currentDeviceDisplayName(): String {
+        return if (::mDevice.isInitialized) {
+            mDevice.alias?.takeIf { it.isNotBlank() }
+                ?: mDevice.name
+                ?: cachedDeviceName
+        } else {
+            cachedDeviceName
+        }
     }
 
     private val routeCallback = object : MediaRouter2.RouteCallback() {
@@ -353,7 +393,7 @@ object RfcommController {
         Log.d(TAG, "Adaptive mode initial: $adaptiveModeEnabled")
         Log.d(
             TAG,
-            "Notification settings initial: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+            "Notification settings initial: batteryIsland=$showConnectionBatteryIslandEnabled, popup=$showConnectionPopupEnabled, popupDismiss=${connectionPopupDismissSeconds}s, show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
         )
         Log.d(TAG, "Auto game mode initial: $autoGameModeEnabled")
         Log.d(TAG, "Game mode implementation initial: ${gameModeImplementation.preferenceValue}")

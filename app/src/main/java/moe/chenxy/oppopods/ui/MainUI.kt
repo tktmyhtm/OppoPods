@@ -110,6 +110,31 @@ fun MainUI(
             )
         )
     }
+    val showConnectionBatteryIsland = remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.SHOW_CONNECTION_BATTERY_ISLAND,
+                OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_BATTERY_ISLAND
+            )
+        )
+    }
+    val showConnectionPopup = remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.SHOW_CONNECTION_POPUP,
+                OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_POPUP
+            )
+        )
+    }
+    val connectionPopupDismissSeconds = remember {
+        mutableStateOf(
+            prefs.getInt(
+                OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS,
+                OppoPodsPrefsKey.DEFAULT_CONNECTION_POPUP_DISMISS_SECONDS
+            ).takeIf { it in OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECOND_OPTIONS }
+                ?: OppoPodsPrefsKey.DEFAULT_CONNECTION_POPUP_DISMISS_SECONDS
+        )
+    }
     val showConnectionNotification = remember {
         mutableStateOf(
             prefs.getBoolean(
@@ -277,12 +302,18 @@ fun MainUI(
     }
 
     fun broadcastNotificationSettings(
+        showConnectionBatteryIslandEnabled: Boolean,
+        showConnectionPopupEnabled: Boolean,
+        connectionPopupDismissSecondsValue: Int,
         showConnectionNotificationEnabled: Boolean,
         notificationIslandStyleEnabled: Boolean
     ) {
         val settings = NotificationSettings(
-            showConnectionNotificationEnabled,
-            notificationIslandStyleEnabled
+            showConnectionBatteryIsland = showConnectionBatteryIslandEnabled,
+            showConnectionPopup = showConnectionPopupEnabled,
+            connectionPopupDismissSeconds = connectionPopupDismissSecondsValue,
+            showConnectionNotification = showConnectionNotificationEnabled,
+            notificationIslandStyle = notificationIslandStyleEnabled
         )
         listOf("com.android.bluetooth", "com.xiaomi.bluetooth").forEach { targetPackage ->
             Intent(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED).apply {
@@ -450,13 +481,61 @@ fun MainUI(
                             context.sendBroadcast(this)
                         }
                     },
+                    showConnectionBatteryIsland = showConnectionBatteryIsland,
+                    onShowConnectionBatteryIslandChange = {
+                        showConnectionBatteryIsland.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_BATTERY_ISLAND, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            it,
+                            showConnectionPopup.value,
+                            connectionPopupDismissSeconds.value,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
+                    },
+                    showConnectionPopup = showConnectionPopup,
+                    onShowConnectionPopupChange = {
+                        showConnectionPopup.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_POPUP, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            it,
+                            connectionPopupDismissSeconds.value,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
+                    },
+                    connectionPopupDismissSeconds = connectionPopupDismissSeconds,
+                    onConnectionPopupDismissSecondsChange = {
+                        connectionPopupDismissSeconds.value = it
+                        prefs.edit()
+                            .putInt(OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            showConnectionPopup.value,
+                            it,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
+                    },
                     showConnectionNotification = showConnectionNotification,
                     onShowConnectionNotificationChange = {
                         showConnectionNotification.value = it
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, it)
                             .commit()
-                        broadcastNotificationSettings(it, notificationIslandStyle.value)
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            showConnectionPopup.value,
+                            connectionPopupDismissSeconds.value,
+                            it,
+                            notificationIslandStyle.value
+                        )
                     },
                     notificationIslandStyle = notificationIslandStyle,
                     onNotificationIslandStyleChange = {
@@ -464,7 +543,13 @@ fun MainUI(
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, it)
                             .commit()
-                        broadcastNotificationSettings(showConnectionNotification.value, it)
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            showConnectionPopup.value,
+                            connectionPopupDismissSeconds.value,
+                            showConnectionNotification.value,
+                            it
+                        )
                     }
                 )
             }
