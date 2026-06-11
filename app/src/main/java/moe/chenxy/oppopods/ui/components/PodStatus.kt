@@ -180,15 +180,19 @@ private fun getBatteryIconRes(level: Int, isCharging: Boolean): Int {
 private fun themedPainterResource(@androidx.annotation.DrawableRes id: Int): Painter {
     val context = LocalContext.current
     val themeConfig = LocalConfiguration.current
-    val sysNightMode = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+    val sysNightMode = if (isSystemInDarkTheme()) {
+        Configuration.UI_MODE_NIGHT_YES
+    } else {
+        Configuration.UI_MODE_NIGHT_NO
+    }
     val themeNightMode = themeConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
 
     return if (sysNightMode == themeNightMode) {
         painterResource(id)
     } else {
-        val themedResources = remember(context, themeNightMode) {
+        val themedResources = remember(context, themeConfig, themeNightMode) {
             context.createConfigurationContext(
-                Configuration(context.resources.configuration).apply {
+                Configuration(themeConfig).apply {
                     uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or themeNightMode
                 }
             ).resources

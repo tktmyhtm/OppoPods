@@ -3,6 +3,7 @@ package moe.chenxy.oppopods.pods
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +27,6 @@ import java.io.InputStream
 class AppRfcommController {
     companion object {
         private const val TAG = "OppoPods-AppRfcomm"
-        private const val RFCOMM_CHANNEL = 15
         private const val BATTERY_POLL_INTERVAL_MS = 30_000L
     }
 
@@ -36,6 +36,8 @@ class AppRfcommController {
 
     private var socket: BluetoothSocket? = null
     private var isConnected = false
+    private var gameModeImplementation = GameModeImplementation.STANDARD
+    private var lastGameModeStatusUpdateMs = 0L
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var batteryPollJob: Job? = null
 
@@ -54,23 +56,22 @@ class AppRfcommController {
     private val _gameMode = MutableStateFlow(false)
     val gameMode: StateFlow<Boolean> = _gameMode
 
-    @SuppressLint("DiscouragedPrivateApi")
-    private fun createRfcommSocket(device: BluetoothDevice): BluetoothSocket {
-        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-        return method.invoke(device, RFCOMM_CHANNEL) as BluetoothSocket
-    }
-
-    fun connect(device: BluetoothDevice, autoGameMode: Boolean = false) {
+    fun connect(
+        device: BluetoothDevice,
+        connectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID,
+        gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
+    ) {
         if (_connectionState.value == ConnectionState.CONNECTING) return
 
+        this.gameModeImplementation = gameModeImplementation
         _deviceName.value = device.name ?: device.address
         _connectionState.value = ConnectionState.CONNECTING
+        batteryPollJob?.cancel()
 
         scope.launch {
             try {
                 delay(300)
-                socket = createRfcommSocket(device)
-                socket!!.connect()
+                socket = OppoRfcommSocketFactory.connect(device, TAG, connectionMethod)
                 Log.d(TAG, "RFCOMM connected to ${device.name}")
                 isConnected = true
                 _connectionState.value = ConnectionState.CONNECTED
@@ -80,31 +81,19 @@ class AppRfcommController {
                 delay(300)
                 queryStatus()
 
-                if (autoGameMode) {
-                    // Wait for initial query responses to settle
-                    delay(500)
-                    sendPacket(Enums.GAME_MODE_ON)
-                    _gameMode.value = true
-                    // Query to verify game mode took effect
-                    delay(300)
-                    sendPacket(Enums.QUERY_STATUS)
-                    // If earbuds report game mode still off, retry
-                    delay(500)
-                    if (!_gameMode.value) {
-                        Log.d(TAG, "Auto game mode: first attempt didn't take, retrying")
-                        sendPacket(Enums.GAME_MODE_ON)
-                        _gameMode.value = true
-                    }
-                }
+                startBatteryPolling()
             } catch (e: IOException) {
                 Log.e(TAG, "RFCOMM connect failed", e)
                 _connectionState.value = ConnectionState.ERROR
                 isConnected = false
+                batteryPollJob?.cancel()
             }
         }
+    }
 
+    private fun startBatteryPolling() {
+        batteryPollJob?.cancel()
         batteryPollJob = scope.launch {
-            delay(2000)
             while (isConnected) {
                 delay(BATTERY_POLL_INTERVAL_MS)
                 if (isConnected) queryStatus()
@@ -115,11 +104,14 @@ class AppRfcommController {
     private fun startPacketReader(inputStream: InputStream) {
         scope.launch {
             val buffer = ByteArray(1024)
+            val framer = OppoPacketFramer()
             try {
                 while (isConnected) {
                     val bytesRead = inputStream.read(buffer)
                     if (bytesRead > 0) {
-                        handlePacket(buffer.copyOfRange(0, bytesRead))
+                        framer.append(buffer, bytesRead).forEach { packet ->
+                            handlePacket(packet)
+                        }
                     } else if (bytesRead == -1) {
                         break
                     }
@@ -164,24 +156,16 @@ class AppRfcommController {
         // Try parse as active battery report (unsolicited, Cmd=0x0204, type=0x01)
         val activeResult = BatteryParser.parseActiveReport(packet)
         if (activeResult != null) {
-            val left = PodParams(
-                activeResult.left?.level ?: 0,
-                activeResult.left?.isCharging == true,
-                activeResult.left != null,
-                0
-            )
-            val right = PodParams(
-                activeResult.right?.level ?: 0,
-                activeResult.right?.isCharging == true,
-                activeResult.right != null,
-                0
-            )
-            val case = PodParams(
-                activeResult.case?.level ?: 0,
-                activeResult.case?.isCharging == true,
-                activeResult.case != null,
-                0
-            )
+            val current = _batteryParams.value
+            val left = activeResult.left?.let {
+                PodParams(it.level, it.isCharging, true, current.left?.rawStatus ?: 0)
+            } ?: current.left
+            val right = activeResult.right?.let {
+                PodParams(it.level, it.isCharging, true, current.right?.rawStatus ?: 0)
+            } ?: current.right
+            val case = activeResult.case?.let {
+                PodParams(it.level, it.isCharging, true, current.case?.rawStatus ?: 0)
+            } ?: current.case
             _batteryParams.value = BatteryParams(left, right, case)
             return
         }
@@ -194,10 +178,17 @@ class AppRfcommController {
         }
 
         // Try parse as batch query response for game mode (Cmd=0x810D)
-        val gameModeResult = GameModeParser.parse(packet)
+        val gameModeResult = GameModeParser.parse(packet, gameModeImplementation)
         if (gameModeResult != null) {
             Log.d(TAG, "Game mode received: $gameModeResult")
+            lastGameModeStatusUpdateMs = SystemClock.elapsedRealtime()
             _gameMode.value = gameModeResult
+            return
+        }
+
+        val setFeatureResult = SwitchFeatureSetParser.parse(packet)
+        if (setFeatureResult != null) {
+            Log.d(TAG, "Switch feature response: status=${setFeatureResult.status}, value=${setFeatureResult.value}")
             return
         }
     }
@@ -213,8 +204,11 @@ class AppRfcommController {
 
     fun setGameMode(enabled: Boolean) {
         _gameMode.value = enabled
-        val packet = if (enabled) Enums.GAME_MODE_ON else Enums.GAME_MODE_OFF
-        scope.launch { sendPacket(packet) }
+        scope.launch { sendGameModePackets(enabled) }
+    }
+
+    fun setGameModeImplementation(implementation: GameModeImplementation) {
+        gameModeImplementation = implementation
     }
 
     fun setANCMode(mode: NoiseControlMode) {
@@ -238,6 +232,13 @@ class AppRfcommController {
             sendPacket(Enums.QUERY_BATTERY)
             delay(50)
             sendPacket(Enums.QUERY_ANC)
+        }
+    }
+
+    private suspend fun sendGameModePackets(enabled: Boolean) {
+        Enums.gameModePackets(enabled, gameModeImplementation).forEachIndexed { index, packet ->
+            if (index > 0) delay(120)
+            sendPacket(packet)
         }
     }
 

@@ -29,6 +29,48 @@ object OppoPackets {
     }
 }
 
+class OppoPacketFramer {
+    private var pending = ByteArray(0)
+
+    fun append(buffer: ByteArray, length: Int): List<ByteArray> {
+        if (length <= 0) return emptyList()
+
+        pending += buffer.copyOfRange(0, length)
+        val frames = mutableListOf<ByteArray>()
+
+        while (pending.isNotEmpty()) {
+            val start = pending.indexOf(OPPO_PACKET_HEADER)
+            if (start < 0) {
+                pending = ByteArray(0)
+                break
+            }
+            if (start > 0) {
+                pending = pending.copyOfRange(start, pending.size)
+            }
+            if (pending.size < 2) break
+
+            val totalLen = pending[1].toInt() and 0xFF
+            val frameLen = totalLen + 2
+            if (totalLen < OPPO_PACKET_MIN_TOTAL_LEN || frameLen > OPPO_PACKET_MAX_FRAME_LEN) {
+                pending = pending.copyOfRange(1, pending.size)
+                continue
+            }
+            if (pending.size < frameLen) break
+
+            frames += pending.copyOfRange(0, frameLen)
+            pending = pending.copyOfRange(frameLen, pending.size)
+        }
+
+        return frames
+    }
+
+    companion object {
+        private val OPPO_PACKET_HEADER = 0xAA.toByte()
+        private const val OPPO_PACKET_MIN_TOTAL_LEN = 7
+        private const val OPPO_PACKET_MAX_FRAME_LEN = 512
+    }
+}
+
 /** ANC mode values for OPPO earphones (used in SET commands). */
 object AncMode {
     const val OFF = 0x01
@@ -48,6 +90,12 @@ object BatteryComponent {
     const val LEFT = 1
     const val RIGHT = 2
     const val CASE = 3
+}
+
+/** Feature IDs used by the switch-feature command/query. */
+object GameModeFeature {
+    const val LOW_LATENCY = 0x06
+    const val MAIN = 0x28
 }
 
 /** Protocol command codes. */
@@ -70,6 +118,8 @@ object Cmd {
     const val QUERY_STATUS = 0x010D
     /** Batch parameter query response */
     const val QUERY_STATUS_RESPONSE = 0x810D
+    /** Switch-feature response */
+    const val SET_GAME_MODE_RESPONSE = 0x8403
 }
 
 /** Pre-built packets. */
@@ -104,15 +154,36 @@ object Enums {
         cmd = Cmd.QUERY_ANC_MODE, payload = byteArrayOf(0x01, 0x01)
     )
 
-    /** Enable game mode: AA 09 00 00 03 04 00 02 00 28 01 */
+    /** Enable game mode main switch: AA 09 00 00 03 04 00 02 00 28 01 */
     val GAME_MODE_ON: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(0x28, 0x01)
+        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.MAIN.toByte(), 0x01)
     )
 
-    /** Disable game mode: AA 09 00 00 03 04 00 02 00 28 00 */
+    /** Disable game mode main switch: AA 09 00 00 03 04 00 02 00 28 00 */
     val GAME_MODE_OFF: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(0x28, 0x00)
+        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.MAIN.toByte(), 0x00)
     )
+
+    /** Enable low-latency game mode: AA 09 00 00 03 04 00 02 00 06 01 */
+    val GAME_LOW_LATENCY_ON: ByteArray = OppoPackets.buildPacket(
+        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.LOW_LATENCY.toByte(), 0x01)
+    )
+
+    /** Disable low-latency game mode: AA 09 00 00 03 04 00 02 00 06 00 */
+    val GAME_LOW_LATENCY_OFF: ByteArray = OppoPackets.buildPacket(
+        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.LOW_LATENCY.toByte(), 0x00)
+    )
+
+    fun gameModePackets(enabled: Boolean, implementation: GameModeImplementation): List<ByteArray> {
+        return when (implementation) {
+            GameModeImplementation.STANDARD -> listOf(if (enabled) GAME_MODE_ON else GAME_MODE_OFF)
+            GameModeImplementation.COMPATIBLE -> if (enabled) {
+                listOf(GAME_MODE_ON, GAME_LOW_LATENCY_ON)
+            } else {
+                listOf(GAME_LOW_LATENCY_OFF, GAME_MODE_OFF)
+            }
+        }
+    }
 
     /**
      * Batch parameter query (fixed hex blob).
@@ -296,13 +367,26 @@ object AncModeParser {
 
 /**
  * Parser for game mode status from batch parameter query response (Cmd=0x810D).
- *
- * Scans payload for byte 0x28 (game mode param ID), reads next byte:
- *   0x01 = enabled, 0x00 = disabled
  */
 object GameModeParser {
 
-    fun parse(data: ByteArray): Boolean? {
+    data class Status(
+        val mainEnabled: Boolean?,
+        val lowLatencyEnabled: Boolean?
+    ) {
+        fun enabledFor(implementation: GameModeImplementation): Boolean? {
+            return when (implementation) {
+                GameModeImplementation.STANDARD -> mainEnabled
+                GameModeImplementation.COMPATIBLE -> lowLatencyEnabled ?: mainEnabled
+            }
+        }
+    }
+
+    fun parse(data: ByteArray, implementation: GameModeImplementation = GameModeImplementation.STANDARD): Boolean? {
+        return parseStatus(data)?.enabledFor(implementation)
+    }
+
+    fun parseStatus(data: ByteArray): Status? {
         if (data.size < 9) return null
         if (data[0] != 0xAA.toByte()) return null
 
@@ -316,12 +400,73 @@ object GameModeParser {
 
         if (data.size < payloadStart + payLen) return null
 
-        // Scan payload for param ID 0x28
+        val structuredStatus = parseStructuredFeaturePairs(data, payloadStart, payLen)
+        if (structuredStatus != null) return structuredStatus
+
+        var mainEnabled: Boolean? = null
+        var lowLatencyEnabled: Boolean? = null
         for (i in payloadStart until minOf(payloadStart + payLen - 1, data.size - 1)) {
-            if ((data[i].toInt() and 0xFF) == 0x28) {
-                return (data[i + 1].toInt() and 0xFF) == 0x01
+            val value = data[i + 1].toInt() and 0xFF
+            if (value != 0x00 && value != 0x01) continue
+            when (data[i].toInt() and 0xFF) {
+                GameModeFeature.MAIN -> mainEnabled = value == 0x01
+                GameModeFeature.LOW_LATENCY -> lowLatencyEnabled = value == 0x01
             }
         }
-        return null
+        return if (mainEnabled != null || lowLatencyEnabled != null) {
+            Status(mainEnabled, lowLatencyEnabled)
+        } else {
+            null
+        }
+    }
+
+    private fun parseStructuredFeaturePairs(data: ByteArray, payloadStart: Int, payLen: Int): Status? {
+        if (payLen < 2) return null
+
+        val statusByte = data[payloadStart].toInt() and 0xFF
+        val count = data[payloadStart + 1].toInt() and 0xFF
+        if (statusByte != 0x00 || count <= 0 || payLen < 2 + count * 2) return null
+
+        var mainEnabled: Boolean? = null
+        var lowLatencyEnabled: Boolean? = null
+        for (j in 0 until count) {
+            val index = payloadStart + 2 + j * 2
+            val featureId = data[index].toInt() and 0xFF
+            val enabled = (data[index + 1].toInt() and 0xFF) == 0x01
+            when (featureId) {
+                GameModeFeature.MAIN -> mainEnabled = enabled
+                GameModeFeature.LOW_LATENCY -> lowLatencyEnabled = enabled
+            }
+        }
+        return if (mainEnabled != null || lowLatencyEnabled != null) {
+            Status(mainEnabled, lowLatencyEnabled)
+        } else {
+            null
+        }
+    }
+}
+
+object SwitchFeatureSetParser {
+    data class Result(
+        val status: Int,
+        val value: Int?
+    )
+
+    fun parse(data: ByteArray): Result? {
+        if (data.size < 9) return null
+        if (data[0] != 0xAA.toByte()) return null
+
+        val cmdLow = data[4].toInt() and 0xFF
+        val cmdHigh = data[5].toInt() and 0xFF
+        val cmd = cmdLow or (cmdHigh shl 8)
+        if (cmd != Cmd.SET_GAME_MODE_RESPONSE) return null
+
+        val payLen = (data[7].toInt() and 0xFF) or ((data[8].toInt() and 0xFF) shl 8)
+        val payloadStart = 9
+        if (payLen <= 0 || data.size < payloadStart + payLen) return null
+
+        val status = data[payloadStart].toInt() and 0xFF
+        val value = if (payLen > 1) data[payloadStart + 1].toInt() and 0xFF else null
+        return Result(status, value)
     }
 }

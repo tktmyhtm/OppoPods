@@ -48,8 +48,11 @@ import androidx.navigation3.ui.NavDisplay
 import moe.chenxy.oppopods.MainActivity
 import moe.chenxy.oppopods.R
 import moe.chenxy.oppopods.pods.AppRfcommController
+import moe.chenxy.oppopods.pods.GameModeImplementation
 import moe.chenxy.oppopods.pods.NoiseControlMode
+import moe.chenxy.oppopods.pods.RfcommConnectionMethod
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.NotificationSettings
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import top.yukonga.miuix.kmp.basic.Icon
@@ -70,6 +73,8 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 sealed interface Screen : NavKey {
     data object Home : Screen
     data object Settings : Screen
+    data object AdvancedSettings : Screen
+    data object About : Screen
 }
 
 @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
@@ -87,17 +92,64 @@ fun MainUI(
     val hookConnected = remember { mutableStateOf(false) }
     val gameMode = remember { mutableStateOf(false) }
 
-    // Auto game mode preference (persisted)
     val prefs = remember { context.getSharedPreferences("oppopods_settings", Context.MODE_PRIVATE) }
-    val autoGameMode = remember { mutableStateOf(prefs.getBoolean("auto_game_mode", false)) }
     val openHeyTap = remember { mutableStateOf(prefs.getBoolean("open_heytap", false)) }
     // Adaptive模式偏好设置（持久化存储），默认开启
     val adaptiveMode = remember { mutableStateOf(prefs.getBoolean("adaptive_mode", true)) }
+    val rfcommConnectionMethod = remember {
+        mutableStateOf(
+            RfcommConnectionMethod.fromPreference(
+                prefs.getString(RfcommConnectionMethod.PREF_KEY, null)
+            )
+        )
+    }
+    val gameModeImplementation = remember {
+        mutableStateOf(
+            GameModeImplementation.fromPreference(
+                prefs.getString(GameModeImplementation.PREF_KEY, null)
+            )
+        )
+    }
+    val showConnectionBatteryIsland = remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.SHOW_CONNECTION_BATTERY_ISLAND,
+                OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_BATTERY_ISLAND
+            )
+        )
+    }
+    val showConnectionPopup = remember {
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.SHOW_CONNECTION_POPUP,
+                OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_POPUP
+            )
+        )
+    }
+    val connectionPopupDismissSeconds = remember {
+        mutableStateOf(
+            prefs.getInt(
+                OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS,
+                OppoPodsPrefsKey.DEFAULT_CONNECTION_POPUP_DISMISS_SECONDS
+            ).takeIf { it in OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECOND_OPTIONS }
+                ?: OppoPodsPrefsKey.DEFAULT_CONNECTION_POPUP_DISMISS_SECONDS
+        )
+    }
     val showConnectionNotification = remember {
-        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true))
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
+                OppoPodsPrefsKey.DEFAULT_SHOW_CONNECTION_NOTIFICATION
+            )
+        )
     }
     val notificationIslandStyle = remember {
-        mutableStateOf(prefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true))
+        mutableStateOf(
+            prefs.getBoolean(
+                OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
+                OppoPodsPrefsKey.DEFAULT_NOTIFICATION_ISLAND_STYLE
+            )
+        )
     }
 
     val appController = remember { AppRfcommController() }
@@ -144,8 +196,13 @@ fun MainUI(
                     }
 
                     OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> {
-                        batteryParams.value =
-                            p1.getParcelableExtra("status", BatteryParams::class.java)!!
+                        p1.getParcelableExtra("status", BatteryParams::class.java)?.let {
+                            batteryParams.value = it
+                        }
+                    }
+
+                    OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED -> {
+                        gameMode.value = p1.getBooleanExtra("enabled", false)
                     }
 
                     OppoPodsAction.ACTION_PODS_CONNECTED -> {
@@ -171,11 +228,18 @@ fun MainUI(
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED)
+            addAction(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_CONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
         }, Context.RECEIVER_EXPORTED)
 
-        context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT))
+        context.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_UI_INIT).apply {
+            setPackage("com.android.bluetooth")
+        })
+        context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            setPackage("com.android.bluetooth")
+            putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
+        })
 
         onDispose {
             try {
@@ -199,6 +263,7 @@ fun MainUI(
         }
         Intent(OppoPodsAction.ACTION_ANC_SELECT).apply {
             this.putExtra("status", status)
+            setPackage("com.android.bluetooth")
             context.sendBroadcast(this)
         }
     }
@@ -211,31 +276,48 @@ fun MainUI(
         gameMode.value = enabled
         Intent(OppoPodsAction.ACTION_GAME_MODE_SET).apply {
             this.putExtra("enabled", enabled)
+            setPackage("com.android.bluetooth")
             context.sendBroadcast(this)
         }
     }
 
     fun onDeviceSelected(device: BluetoothDevice) {
-        appController.connect(device, autoGameMode = autoGameMode.value)
+        appController.connect(
+            device = device,
+            connectionMethod = rfcommConnectionMethod.value,
+            gameModeImplementation = gameModeImplementation.value
+        )
     }
 
     fun refreshStatus() {
         if (isStandaloneConnected) {
             appController.refreshStatus()
         } else if (hookConnected.value) {
-            context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS))
+            context.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+                setPackage("com.android.bluetooth")
+                putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, true)
+            })
         }
     }
 
     fun broadcastNotificationSettings(
+        showConnectionBatteryIslandEnabled: Boolean,
+        showConnectionPopupEnabled: Boolean,
+        connectionPopupDismissSecondsValue: Int,
         showConnectionNotificationEnabled: Boolean,
         notificationIslandStyleEnabled: Boolean
     ) {
+        val settings = NotificationSettings(
+            showConnectionBatteryIsland = showConnectionBatteryIslandEnabled,
+            showConnectionPopup = showConnectionPopupEnabled,
+            connectionPopupDismissSeconds = connectionPopupDismissSecondsValue,
+            showConnectionNotification = showConnectionNotificationEnabled,
+            notificationIslandStyle = notificationIslandStyleEnabled
+        )
         listOf("com.android.bluetooth", "com.xiaomi.bluetooth").forEach { targetPackage ->
             Intent(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED).apply {
                 setPackage(targetPackage)
-                putExtra(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, showConnectionNotificationEnabled)
-                putExtra(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, notificationIslandStyleEnabled)
+                settings.putExtras(this)
                 addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                 context.sendBroadcast(this)
             }
@@ -343,48 +425,159 @@ fun MainUI(
                     contentPadding = padding,
                     themeMode = themeMode,
                     onThemeModeChange = onThemeModeChange,
-                    autoGameMode = autoGameMode,
-                    onAutoGameModeChange = {
-                        autoGameMode.value = it
-                        prefs.edit().putBoolean("auto_game_mode", it).apply()
-                    },
-                    openHeyTap = openHeyTap,
-                    onOpenHeyTapChange = {
-                        openHeyTap.value = it
-                        prefs.edit().putBoolean("open_heytap", it).apply()
-                    },
                     adaptiveMode = adaptiveMode,
                     onAdaptiveModeChange = {
                         adaptiveMode.value = it
                         prefs.edit().putBoolean("adaptive_mode", it).apply()
                         // 广播 Adaptive 模式状态变更到蓝牙进程，确保跨进程实时同步
-                        Intent(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED).apply {
-                            putExtra("enabled", it)
-                            context.sendBroadcast(this)
+                        listOf("com.android.bluetooth", "com.xiaomi.bluetooth").forEach { targetPackage ->
+                            Intent(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED).apply {
+                                setPackage(targetPackage)
+                                putExtra("enabled", it)
+                                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                                context.sendBroadcast(this)
+                            }
                         }
                         // 关闭Adaptive模式时，若当前处于Adaptive模式则自动切换至降噪模式
                         if (!it && displayAnc == NoiseControlMode.ADAPTIVE) {
                             setAncMode(NoiseControlMode.NOISE_CANCELLATION)
                         }
                     },
+                    showConnectionBatteryIsland = showConnectionBatteryIsland,
+                    onShowConnectionBatteryIslandChange = {
+                        showConnectionBatteryIsland.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_BATTERY_ISLAND, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            it,
+                            showConnectionPopup.value,
+                            connectionPopupDismissSeconds.value,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
+                    },
                     showConnectionNotification = showConnectionNotification,
                     onShowConnectionNotificationChange = {
                         showConnectionNotification.value = it
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, it)
-                            .apply()
-                        broadcastNotificationSettings(it, notificationIslandStyle.value)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            showConnectionPopup.value,
+                            connectionPopupDismissSeconds.value,
+                            it,
+                            notificationIslandStyle.value
+                        )
                     },
                     notificationIslandStyle = notificationIslandStyle,
                     onNotificationIslandStyleChange = {
                         notificationIslandStyle.value = it
                         prefs.edit()
                             .putBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            showConnectionPopup.value,
+                            connectionPopupDismissSeconds.value,
+                            showConnectionNotification.value,
+                            it
+                        )
+                    },
+                    onOpenAdvancedSettings = { backStack.add(Screen.AdvancedSettings) },
+                    onOpenAbout = { backStack.add(Screen.About) }
+                )
+            }
+        }
+        entry<Screen.AdvancedSettings> {
+            val advancedScrollBehavior = MiuixScrollBehavior(rememberTopAppBarState())
+
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = stringResource(R.string.advanced_settings),
+                        largeTitle = stringResource(R.string.advanced_settings),
+                        scrollBehavior = advancedScrollBehavior,
+                        navigationIcon = {
+                            IconButton(
+                                onClick = { backStack.removeLast() },
+                            ) {
+                                Icon(
+                                    imageVector = MiuixIcons.Back,
+                                    contentDescription = "Back"
+                                )
+                            }
+                        }
+                    )
+                }
+            ) { padding ->
+                AdvancedSettingsPage(
+                    modifier = Modifier
+                        .overScrollVertical()
+                        .nestedScroll(advancedScrollBehavior.nestedScrollConnection),
+                    contentPadding = padding,
+                    openHeyTap = openHeyTap,
+                    onOpenHeyTapChange = {
+                        openHeyTap.value = it
+                        prefs.edit().putBoolean("open_heytap", it).apply()
+                    },
+                    rfcommConnectionMethod = rfcommConnectionMethod,
+                    onRfcommConnectionMethodChange = {
+                        rfcommConnectionMethod.value = it
+                        prefs.edit()
+                            .putString(RfcommConnectionMethod.PREF_KEY, it.preferenceValue)
                             .apply()
-                        broadcastNotificationSettings(showConnectionNotification.value, it)
+                    },
+                    gameModeImplementation = gameModeImplementation,
+                    onGameModeImplementationChange = {
+                        gameModeImplementation.value = it
+                        appController.setGameModeImplementation(it)
+                        prefs.edit()
+                            .putString(GameModeImplementation.PREF_KEY, it.preferenceValue)
+                            .apply()
+                        Intent(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED).apply {
+                            setPackage("com.android.bluetooth")
+                            putExtra(GameModeImplementation.PREF_KEY, it.preferenceValue)
+                            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                            context.sendBroadcast(this)
+                        }
+                    },
+                    showConnectionPopup = showConnectionPopup,
+                    onShowConnectionPopupChange = {
+                        showConnectionPopup.value = it
+                        prefs.edit()
+                            .putBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_POPUP, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            it,
+                            connectionPopupDismissSeconds.value,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
+                    },
+                    connectionPopupDismissSeconds = connectionPopupDismissSeconds,
+                    onConnectionPopupDismissSecondsChange = {
+                        connectionPopupDismissSeconds.value = it
+                        prefs.edit()
+                            .putInt(OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS, it)
+                            .commit()
+                        broadcastNotificationSettings(
+                            showConnectionBatteryIsland.value,
+                            showConnectionPopup.value,
+                            it,
+                            showConnectionNotification.value,
+                            notificationIslandStyle.value
+                        )
                     }
                 )
             }
+        }
+        entry<Screen.About> {
+            AboutPage(
+                onBack = { backStack.removeLast() }
+            )
         }
     }
 

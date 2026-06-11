@@ -6,16 +6,24 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.SystemClock
 import android.util.Log
+import android.view.View
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
+import java.util.concurrent.CompletableFuture
 
 @SuppressLint("MissingPermission")
 object MiLinkServiceHook : HookContext() {
     private const val TAG = "OppoPods-MiLink"
     private const val FAKE_DEVICE_ID = "01010901"
     private const val PREFS_NAME = "oppopods_milink_state"
+    private const val PANEL_REFRESH_THROTTLE_MS = 5_000L
+    private const val FIND_RING_IDLE = 0
+    private const val FIND_RING_ACTIVE = 103
+    private const val FIND_RING_RESULT_SUCCESS = 100
+    private const val HEADSET_FIND_RING_CHANGED = 10
     private val knownOppoAddresses = linkedSetOf<String>()
     private var context: Context? = null
     private var receiverRegistered = false
@@ -23,11 +31,18 @@ object MiLinkServiceHook : HookContext() {
     private var currentName: String? = null
     private var currentBattery: BatteryParams = BatteryParams()
     private var currentAnc = 1
+    private var currentGameMode = false
+    private var lastPanelRefreshMs = 0L
+    private var lastHeadsetController: Any? = null
+    private var lastHeadsetDevice: BluetoothDevice? = null
 
     override fun onHook() {
         hookContextEntry()
         hookMxBluetoothRuntime()
         hookHeadsetRuntimeDisplay()
+        hookFindRingControllerCommand()
+        hookFindRingCommand()
+        hookFindRingTitle()
     }
 
     private fun hookContextEntry() {
@@ -64,32 +79,45 @@ object MiLinkServiceHook : HookContext() {
         classes.forEach { className ->
             hookStringAddressResult(className, "isMiTWS") { true }
             hookStringAddressResult(className, "isSupportAudioSwitch") { 1 }
-            hookStringAddressResult(className, "getRingFindState") { false }
+            hookStringAddressResult(className, "getRingFindState") { miLinkFindRingActive() }
         }
     }
 
     private fun hookHeadsetRuntimeDisplay() {
         hookBluetoothDeviceResult("com.miui.headset.runtime.ProfileContext", "getDeviceId") { FAKE_DEVICE_ID }
-        hookBluetoothDeviceResult("com.miui.headset.runtime.ProfileContext", "getBatteryLevel") { miLinkBatteryLevels() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.ProfileContext", "getBatteryLevel", reconnectOnRead = true) { miLinkBatteryLevels() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.ProfileContext", "getFindRingState") { miLinkFindRingState() }
         hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getDeviceId") { FAKE_DEVICE_ID }
         hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getAncState") { miLinkAncState() }
-        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getBatteryLevelCache") { miLinkBatteryLevels() }
-        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getHeadsetPropertyBlock") { batteryPercentForMiLink() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getFindRingState") { miLinkFindRingState() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getBatteryLevelCache", reconnectOnRead = true) { miLinkBatteryLevels() }
+        hookBluetoothDeviceResult("com.miui.headset.runtime.AncBatteryController", "getHeadsetPropertyBlock", reconnectOnRead = true) { batteryPercentForMiLink() }
         hookAncStateBlock()
         hookHeadsetInfoNoArg("getDeviceId") { FAKE_DEVICE_ID }
         hookHeadsetInfoNoArg("component3") { FAKE_DEVICE_ID }
-        hookHeadsetInfoNoArg("getPowers") { miLinkBatteryLevels() }
-        hookHeadsetInfoNoArg("component4") { miLinkBatteryLevels() }
+        hookHeadsetInfoNoArg("getPowers", reconnectOnRead = true) { miLinkBatteryLevels() }
+        hookHeadsetInfoNoArg("component4", reconnectOnRead = true) { miLinkBatteryLevels() }
         hookHeadsetInfoNoArg("getMode") { miLinkAncState() }
         hookHeadsetInfoNoArg("component5") { miLinkAncState() }
+        hookHeadsetInfoNoArg("getFindRingState") { miLinkFindRingState() }
+        hookHeadsetInfoNoArg("component11") { miLinkFindRingState() }
     }
 
-    private fun hookBluetoothDeviceResult(className: String, methodName: String, result: () -> Any) {
+    private fun hookBluetoothDeviceResult(
+        className: String,
+        methodName: String,
+        reconnectOnRead: Boolean = false,
+        result: () -> Any
+    ) {
         runCatching {
             hookAfter(findMethod(className, methodName, BluetoothDevice::class.java)) {
                 val device = args[0] as? BluetoothDevice ?: return@hookAfter
                 if (!isOppoPod(device)) return@hookAfter
                 val old = this.result
+                rememberHeadsetController(className, instance, device)
+                if (reconnectOnRead) {
+                    requestPanelBluetoothStatus("$className.$methodName")
+                }
                 this.result = result()
                 if (className == "com.miui.headset.runtime.AncBatteryController" && methodName == "getHeadsetPropertyBlock") {
                     notifyHeadsetPropertyChanged(instance, device, 4)
@@ -146,11 +174,103 @@ object MiLinkServiceHook : HookContext() {
         }.onFailure { Log.w(TAG, "hook AncBatteryController.setAncStateBlock skipped", it) }
     }
 
-    private fun hookHeadsetInfoNoArg(methodName: String, result: () -> Any) {
+    private fun hookFindRingCommand() {
+        runCatching {
+            hookBefore(findMethod("com.miui.headset.runtime.AncBatteryController", "setFindRing", BluetoothDevice::class.java, Int::class.javaPrimitiveType!!)) {
+                val device = args[0] as? BluetoothDevice ?: return@hookBefore
+                if (!isOppoPod(device)) return@hookBefore
+                val state = args[1] as? Int ?: return@hookBefore
+                val instanceContext = runCatching { getObjectField(instance, "context") as? Context }.getOrNull()
+                if (instanceContext != null) {
+                    context = instanceContext.applicationContext ?: instanceContext
+                }
+                rememberHeadsetController("com.miui.headset.runtime.AncBatteryController", instance, device)
+
+                if (state == FIND_RING_IDLE && shouldIgnoreFindRingStop()) {
+                    this.result = FIND_RING_RESULT_SUCCESS
+                    Log.d(TAG, "AncBatteryController.setFindRing lifecycle stop ignored address=${device.address}")
+                    return@hookBefore
+                }
+
+                val enabled = state != FIND_RING_IDLE
+                if (enabled == currentGameMode) {
+                    notifyFindRingChanged(instance, device)
+                    this.result = FIND_RING_RESULT_SUCCESS
+                    Log.d(TAG, "AncBatteryController.setFindRing duplicate ignored address=${device.address} state=$state gameMode=$currentGameMode")
+                    return@hookBefore
+                }
+
+                currentGameMode = enabled
+                sendOppoGameMode(enabled, instanceContext)
+                saveState(instanceContext)
+                notifyFindRingChanged(instance, device)
+                this.result = FIND_RING_RESULT_SUCCESS
+                Log.d(TAG, "AncBatteryController.setFindRing handled address=${device.address} state=$state gameMode=$enabled")
+            }
+        }.onFailure { Log.w(TAG, "hook AncBatteryController.setFindRing skipped", it) }
+    }
+
+    private fun hookFindRingControllerCommand() {
+        runCatching {
+            val headsetInfoClass = findClass("com.miui.circulate.api.service.CirculateServiceInfo")
+            val detailClass = findHeadSetsDetailClass()
+            val controllerClass = detailClass
+                ?.let { findHeadsetControllerClass(it, headsetInfoClass) }
+                ?: findClass("com.miui.circulate.api.protocol.headset.C4652c0")
+            val methods = controllerCommandMethods(controllerClass, headsetInfoClass)
+            if (methods.isEmpty()) {
+                Log.w(TAG, "hook headset controller setFindRing skipped: command method not found in ${controllerClass.name}")
+                return
+            }
+
+            methods.forEach { method ->
+                hookBefore(method) {
+                    val state = args[1] as? Int ?: return@hookBefore
+                    if (state == FIND_RING_IDLE && isHeadSetsDetailDetachCall()) {
+                        this.result = CompletableFuture.completedFuture(FIND_RING_RESULT_SUCCESS)
+                        Log.d(TAG, "HeadsetServiceController.${method.name} detach stop ignored")
+                    }
+                }
+                Log.d(TAG, "hooked headset controller command ${controllerClass.name}.${method.name}")
+            }
+        }.onFailure { Log.w(TAG, "hook headset controller command skipped", it) }
+    }
+
+    private fun hookFindRingTitle() {
+        val synergyViewClass = listOf(
+            "com.miui.circulate.world.sticker.ui.SynergyView",
+            "com.miui.circulate.world.sticker.p067ui.SynergyView"
+        ).firstNotNullOfOrNull { className ->
+            runCatching { findClass(className) }.getOrNull()
+        } ?: run {
+            Log.w(TAG, "hook SynergyView.setTitle skipped: class not found")
+            return
+        }
+
+        runCatching {
+            hookBefore(synergyViewClass.getDeclaredMethod("setTitle", Int::class.javaPrimitiveType!!).apply { isAccessible = true }) {
+                val view = instance as? View ?: return@hookBefore
+                val resId = args[0] as? Int ?: return@hookBefore
+                val title = gameModeTitleReplacement(view, resId) ?: return@hookBefore
+                if (!setSynergyTitle(view, title)) return@hookBefore
+                this.result = null
+                Log.d(TAG, "SynergyView.setTitle replaced res=${resourceEntryName(view, resId)} title=$title")
+            }
+        }.onFailure { Log.w(TAG, "hook SynergyView.setTitle skipped", it) }
+    }
+
+    private fun hookHeadsetInfoNoArg(
+        methodName: String,
+        reconnectOnRead: Boolean = false,
+        result: () -> Any
+    ) {
         runCatching {
             hookAfter(findMethodByParamCount("com.miui.headset.api.HeadsetInfo", methodName, 0)) {
                 if (!isTargetHeadsetInfo(instance)) return@hookAfter
                 val old = this.result
+                if (reconnectOnRead) {
+                    requestPanelBluetoothStatus("HeadsetInfo.$methodName")
+                }
                 this.result = result()
                 Log.d(TAG, "HeadsetInfo.$methodName forced old=$old new=${this.result}")
             }
@@ -165,6 +285,7 @@ object MiLinkServiceHook : HookContext() {
             addAction(OppoPodsAction.ACTION_PODS_DISCONNECTED)
             addAction(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED)
             addAction(OppoPodsAction.ACTION_PODS_ANC_CHANGED)
+            addAction(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED)
         }
         context?.registerReceiver(object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -189,16 +310,37 @@ object MiLinkServiceHook : HookContext() {
                         currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
                         saveState(context)
                     }
+                    OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED -> {
+                        currentAddress = intent.getStringExtra("address") ?: currentAddress
+                        currentGameMode = intent.getBooleanExtra("enabled", currentGameMode)
+                        currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
+                        saveState(context)
+                        notifyFindRingChanged()
+                    }
                 }
-                Log.d(TAG, "state action=${intent?.action} address=$currentAddress name=$currentName anc=$currentAnc rawBattery=${currentBattery.debugString()} miLinkBattery=${miLinkBatteryLevels()}")
+                Log.d(TAG, "state action=${intent?.action} address=$currentAddress name=$currentName anc=$currentAnc gameMode=$currentGameMode rawBattery=${currentBattery.debugString()} miLinkBattery=${miLinkBatteryLevels()}")
             }
         }, filter, Context.RECEIVER_EXPORTED)
         receiverRegistered = true
-        context?.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+        requestBluetoothStatus("receiver-register")
+        Log.d(TAG, "registered status receiver context=$context")
+    }
+
+    private fun requestPanelBluetoothStatus(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastPanelRefreshMs < PANEL_REFRESH_THROTTLE_MS) return
+        lastPanelRefreshMs = now
+        requestBluetoothStatus("panel-$reason", allowReconnect = true)
+    }
+
+    private fun requestBluetoothStatus(reason: String, allowReconnect: Boolean = false) {
+        val ctx = context ?: return
+        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_REFRESH_STATUS).apply {
+            putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, allowReconnect)
             setPackage("com.android.bluetooth")
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
-        Log.d(TAG, "registered status receiver context=$context")
+        Log.d(TAG, "requested bluetooth status reason=$reason allowReconnect=$allowReconnect")
     }
 
     private fun isOppoPod(device: BluetoothDevice): Boolean {
@@ -243,6 +385,16 @@ object MiLinkServiceHook : HookContext() {
             2 -> 3
             else -> 1
         }
+    }
+
+    private fun miLinkFindRingState(): Int {
+        loadState()
+        return if (currentGameMode) FIND_RING_ACTIVE else FIND_RING_IDLE
+    }
+
+    private fun miLinkFindRingActive(): Boolean {
+        loadState()
+        return currentGameMode
     }
 
     private fun miLinkBatteryLevels(): List<Int> {
@@ -291,6 +443,20 @@ object MiLinkServiceHook : HookContext() {
         Log.d(TAG, "sendOppoAnc broadcast sent mode=$mode")
     }
 
+    private fun sendOppoGameMode(enabled: Boolean, fallbackContext: Context? = null) {
+        val ctx = fallbackContext ?: context ?: run {
+            Log.w(TAG, "sendOppoGameMode skipped: context is null enabled=$enabled")
+            return
+        }
+        Intent(OppoPodsAction.ACTION_GAME_MODE_SET).apply {
+            putExtra("enabled", enabled)
+            setPackage("com.android.bluetooth")
+            addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+            ctx.sendBroadcast(this)
+        }
+        Log.d(TAG, "sendOppoGameMode broadcast sent enabled=$enabled")
+    }
+
     private fun sendMiLinkAncChanged(mode: Int, fallbackContext: Context? = null) {
         val ctx = fallbackContext ?: context ?: return
         ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
@@ -299,6 +465,86 @@ object MiLinkServiceHook : HookContext() {
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
         Log.d(TAG, "sendMiLinkAncChanged broadcast sent mode=$mode")
+    }
+
+    private fun notifyFindRingChanged(controller: Any? = lastHeadsetController, device: BluetoothDevice? = lastHeadsetDevice) {
+        if (controller == null || device == null) return
+        notifyHeadsetPropertyChanged(controller, device, HEADSET_FIND_RING_CHANGED)
+    }
+
+    private fun rememberHeadsetController(className: String, controller: Any?, device: BluetoothDevice) {
+        if (className != "com.miui.headset.runtime.AncBatteryController") return
+        lastHeadsetController = controller
+        lastHeadsetDevice = device
+    }
+
+    private fun shouldIgnoreFindRingStop(): Boolean {
+        return isHeadSetsDetailDetachCall()
+    }
+
+    private fun findHeadSetsDetailClass(): Class<*>? {
+        return listOf(
+            "com.miui.circulateplus.world.headset.HeadSetsDetail",
+            "com.miui.circulate.world.headset.HeadSetsDetail",
+            "com.miui.circulate.world.detail.HeadSetsDetail"
+        ).firstNotNullOfOrNull { className ->
+            runCatching { findClass(className) }.getOrNull()
+        }
+    }
+
+    private fun findHeadsetControllerClass(detailClass: Class<*>, headsetInfoClass: Class<*>): Class<*>? {
+        runCatching {
+            detailClass.getDeclaredMethod("getHeadsetController").returnType
+        }.getOrNull()
+            ?.takeIf { hasHeadsetControllerCommandSignature(it, headsetInfoClass) }
+            ?.let { return it }
+
+        return detailClass.declaredFields
+            .map { it.type }
+            .firstOrNull { hasHeadsetControllerCommandSignature(it, headsetInfoClass) }
+    }
+
+    private fun hasHeadsetControllerCommandSignature(controllerClass: Class<*>, headsetInfoClass: Class<*>): Boolean {
+        return controllerCommandMethods(controllerClass, headsetInfoClass).isNotEmpty()
+    }
+
+    private fun controllerCommandMethods(controllerClass: Class<*>, headsetInfoClass: Class<*>): List<java.lang.reflect.Method> {
+        val intType = Int::class.javaPrimitiveType!!
+        return controllerClass.declaredMethods.filter { method ->
+            CompletableFuture::class.java.isAssignableFrom(method.returnType) &&
+                method.parameterTypes.size == 2 &&
+                method.parameterTypes[0] == headsetInfoClass &&
+                method.parameterTypes[1] == intType
+        }.onEach { it.isAccessible = true }
+    }
+
+    private fun isHeadSetsDetailDetachCall(): Boolean {
+        return Throwable().stackTrace.any {
+            it.className.endsWith(".HeadSetsDetail") && it.methodName == "onDetachedFromWindow"
+        }
+    }
+
+    private fun gameModeTitleReplacement(view: View, resId: Int): CharSequence? {
+        val viewName = resourceEntryName(view, view.id)
+        if (viewName != "mi_audio_ringing_view" && viewName != "audio_ringing_view") return null
+        return when (resourceEntryName(view, resId)) {
+            "circulate_headset_control_audio_find_earphone" -> "打开游戏模式"
+            "circulate_headset_control_audio_stop_find_earphone" -> "关闭游戏模式"
+            else -> null
+        }
+    }
+
+    private fun resourceEntryName(view: View, resId: Int): String? {
+        if (resId == View.NO_ID) return null
+        return runCatching { view.resources.getResourceEntryName(resId) }.getOrNull()
+    }
+
+    private fun setSynergyTitle(view: View, title: CharSequence): Boolean {
+        return runCatching {
+            view.javaClass.getDeclaredMethod("setTitle", CharSequence::class.java).apply { isAccessible = true }
+                .invoke(view, title)
+            true
+        }.getOrDefault(false)
     }
 
     private fun notifyHeadsetPropertyChanged(controller: Any?, device: BluetoothDevice, updateType: Int) {
@@ -329,6 +575,7 @@ object MiLinkServiceHook : HookContext() {
             .putString("address", currentAddress)
             .putString("name", currentName)
             .putInt("anc", currentAnc)
+            .putBoolean("game_mode", currentGameMode)
             .putInt("left_battery", currentBattery.left?.battery ?: 0)
             .putBoolean("left_connected", currentBattery.left?.isConnected == true)
             .putBoolean("left_charging", currentBattery.left?.isCharging == true)
@@ -346,6 +593,7 @@ object MiLinkServiceHook : HookContext() {
         currentAddress = prefs.getString("address", currentAddress)
         currentName = prefs.getString("name", currentName)
         currentAnc = prefs.getInt("anc", currentAnc)
+        currentGameMode = prefs.getBoolean("game_mode", currentGameMode)
         currentAddress?.let { knownOppoAddresses.add(it.uppercase()) }
         currentBattery = BatteryParams(
             left = PodParams(

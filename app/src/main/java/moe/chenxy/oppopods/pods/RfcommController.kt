@@ -14,6 +14,7 @@ import android.media.AudioManager
 import android.media.MediaRoute2Info
 import android.media.MediaRouter2
 import android.media.RouteDiscoveryPreference
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,21 +27,21 @@ import moe.chenxy.oppopods.utils.SystemApisUtils.setIconVisibility
 import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil
 import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.NotificationSettings
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 import java.io.IOException
-import java.io.InputStream
 import android.content.SharedPreferences
 import java.util.concurrent.Executor
 
 @SuppressLint("MissingPermission", "StaticFieldLeak")
 object RfcommController {
     private const val TAG = "OppoPods-RfcommController"
-    private const val RFCOMM_CHANNEL = 15
     private const val BATTERY_POLL_INTERVAL_MS = 30_000L
 
     // Basic Objects
+    private val rfcommLock = Any()
     private var socket: BluetoothSocket? = null
     private var mContext: Context? = null
     lateinit var mDevice: BluetoothDevice
@@ -55,15 +56,30 @@ object RfcommController {
 
     // Status
     private var mShowedConnectedToast = false
-    private var isConnected = false
+    @Volatile
+    private var isPodConnected = false
+    @Volatile
+    private var isRfcommConnected = false
     private var lastTempBatt = 0
     lateinit var currentBatteryParams: BatteryParams
     private var currentAnc: Int = 1
     private var currentGameMode: Boolean = false
+    private var gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
+    private var rfcommConnectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID
+    private var lastGameModeStatusUpdateMs: Long = 0L
     // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
     private var adaptiveModeEnabled: Boolean = true
-    private var showConnectionNotificationEnabled: Boolean = true
-    private var notificationIslandStyleEnabled: Boolean = true
+    private var notificationSettings: NotificationSettings = NotificationSettings()
+    private val showConnectionBatteryIslandEnabled: Boolean
+        get() = notificationSettings.showConnectionBatteryIsland
+    private val showConnectionPopupEnabled: Boolean
+        get() = notificationSettings.showConnectionPopup
+    private val connectionPopupDismissSeconds: Int
+        get() = notificationSettings.connectionPopupDismissSeconds
+    private val showConnectionNotificationEnabled: Boolean
+        get() = notificationSettings.showConnectionNotification
+    private val notificationIslandStyleEnabled: Boolean
+        get() = notificationSettings.notificationIslandStyle
     private var lastKnownCaseBattery: Int = 0
     private var lastKnownCaseCharging: Boolean = false
     private var cachedDeviceName: String = ""
@@ -73,7 +89,7 @@ object RfcommController {
 
     private val broadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(p0: Context?, p1: Intent?) {
-            handleUIEvent(p1!!)
+            p1?.let { handleUIEvent(it) }
         }
     }
 
@@ -111,6 +127,9 @@ object RfcommController {
             this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
             mContext!!.sendBroadcast(this)
         }
+        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED) {
+            putExtra("enabled", enabled)
+        }
     }
 
     private fun refreshPodsNotification() {
@@ -123,15 +142,12 @@ object RfcommController {
         }
 
         if (!::currentBatteryParams.isInitialized) return
-        if (!notificationIslandStyleEnabled) {
-            cancelPodsNotificationByMiuiBt(context, mDevice)
-        }
         MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
             context,
             currentBatteryParams,
             mDevice,
-            showConnectionNotificationEnabled,
-            notificationIslandStyleEnabled
+            notificationSettings,
+            isRfcommConnected
         )
     }
 
@@ -158,11 +174,21 @@ object RfcommController {
                 setANCMode(status)
             }
             OppoPodsAction.ACTION_REFRESH_STATUS -> {
-                queryStatus()
+                val allowReconnect = intent.getBooleanExtra(
+                    OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT,
+                    false
+                )
+                queryStatus(allowReconnect)
             }
             OppoPodsAction.ACTION_GAME_MODE_SET -> {
                 val enabled = intent.getBooleanExtra("enabled", false)
                 setGameMode(enabled)
+            }
+            OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED -> {
+                gameModeImplementation = GameModeImplementation.fromPreference(
+                    intent.getStringExtra(GameModeImplementation.PREF_KEY)
+                )
+                Log.d(TAG, "Game mode implementation synced: ${gameModeImplementation.preferenceValue}")
             }
             OppoPodsAction.ACTION_CYCLE_ANC -> {
                 cycleAnc()
@@ -177,57 +203,76 @@ object RfcommController {
                 }
             }
             OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED -> {
-                showConnectionNotificationEnabled = intent.getBooleanExtra(
-                    OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION,
-                    showConnectionNotificationEnabled
-                )
-                notificationIslandStyleEnabled = intent.getBooleanExtra(
-                    OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE,
-                    notificationIslandStyleEnabled
-                )
+                notificationSettings = NotificationSettings.fromIntent(intent, notificationSettings)
                 Log.d(
                     TAG,
-                    "Notification settings synced: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+                    "Notification settings synced: batteryIsland=$showConnectionBatteryIslandEnabled, popup=$showConnectionPopupEnabled, popupDismiss=${connectionPopupDismissSeconds}s, show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
                 )
                 refreshPodsNotification()
             }
         }
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
-    fun handleBatteryChanged(result: BatteryParser.BatteryResult) {
-        val left = PodParams(
-            result.left?.level ?: 0,
-            result.left?.isCharging == true,
-            result.left != null,
-            0
-        )
-        val right = PodParams(
-            result.right?.level ?: 0,
-            result.right?.isCharging == true,
-            result.right != null,
-            0
-        )
-        val case = if (result.case != null) {
-            lastKnownCaseBattery = result.case.level
-            lastKnownCaseCharging = result.case.isCharging
-            PodParams(
-                result.case.level,
-                result.case.isCharging,
-                true,
-                0
+    private fun currentBatterySnapshot(): BatteryParams {
+        return if (::currentBatteryParams.isInitialized) {
+            BatteryParams(
+                currentBatteryParams.left?.copy(),
+                currentBatteryParams.right?.copy(),
+                currentBatteryParams.case?.copy()
             )
         } else {
-            PodParams(
-                lastKnownCaseBattery,
-                lastKnownCaseCharging,
-                false,
-                0
-            )
+            BatteryParams()
         }
+    }
+
+    private fun batteryInfoToPodParams(
+        info: BatteryParser.BatteryInfo?,
+        previous: PodParams?,
+        preserveMissing: Boolean
+    ): PodParams {
+        if (info != null) {
+            return PodParams(info.level, info.isCharging, true, previous?.rawStatus ?: 0)
+        }
+        if (preserveMissing && previous != null) return previous.copy()
+        return PodParams(0, false, false, previous?.rawStatus ?: 0)
+    }
+
+    private fun caseInfoToPodParams(
+        info: BatteryParser.BatteryInfo?,
+        previous: PodParams?,
+        preserveMissing: Boolean
+    ): PodParams {
+        if (info != null) {
+            lastKnownCaseBattery = info.level
+            lastKnownCaseCharging = info.isCharging
+            return PodParams(info.level, info.isCharging, true, previous?.rawStatus ?: 0)
+        }
+        if (preserveMissing && previous != null) return previous.copy()
+        return PodParams(lastKnownCaseBattery, lastKnownCaseCharging, false, previous?.rawStatus ?: 0)
+    }
+
+    fun handleBatteryChanged(result: BatteryParser.BatteryResult, preserveMissing: Boolean = false) {
+        val previous = currentBatterySnapshot()
+        val batteryParams = BatteryParams(
+            left = batteryInfoToPodParams(result.left, previous.left, preserveMissing),
+            right = batteryInfoToPodParams(result.right, previous.right, preserveMissing),
+            case = caseInfoToPodParams(result.case, previous.case, preserveMissing)
+        )
+        publishBatteryParams(batteryParams)
+    }
+
+    @OptIn(ExperimentalStdlibApi::class)
+    private fun publishBatteryParams(batteryParams: BatteryParams) {
+        val context = mContext ?: return
+        val left = batteryParams.left ?: PodParams()
+        val right = batteryParams.right ?: PodParams()
+        val case = batteryParams.case ?: PodParams()
 
         if (BuildConfig.DEBUG) {
-            Log.v(TAG, "batt left ${left.battery} right ${right.battery} case ${case.battery}")
+            Log.v(
+                TAG,
+                "batt left ${left.battery}/${left.isCharging} right ${right.battery}/${right.isCharging} case ${case.battery}/${case.isCharging}"
+            )
         }
 
         val shouldShowToast = !mShowedConnectedToast
@@ -238,23 +283,30 @@ object RfcommController {
             if (!hasValidData) return
         }
 
-        val batteryParams = BatteryParams(left, right, case)
         currentBatteryParams = batteryParams
 
         if (shouldShowToast) {
-            MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(mContext!!, batteryParams)
             mShowedConnectedToast = true
+            if (showConnectionBatteryIslandEnabled) {
+                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
+                    context,
+                    batteryParams
+                )
+            }
+            if (showConnectionPopupEnabled) {
+                showConnectionPopup(context, batteryParams)
+            }
         }
         if (showConnectionNotificationEnabled) {
             MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
-                mContext!!,
+                context,
                 batteryParams,
                 mDevice,
-                showConnectionNotificationEnabled,
-                notificationIslandStyleEnabled
+                notificationSettings,
+                isRfcommConnected
             )
         } else {
-            cancelPodsNotificationByMiuiBt(mContext!!, mDevice)
+            cancelPodsNotificationByMiuiBt(context, mDevice)
         }
         changeUIBatteryStatus(batteryParams)
 
@@ -267,6 +319,34 @@ object RfcommController {
         else SystemApisUtils.BATTERY_LEVEL_UNKNOWN
 
         setRegularBatteryLevel(lastTempBatt)
+    }
+
+    private fun showConnectionPopup(context: Context, batteryParams: BatteryParams) {
+        try {
+            Intent().apply {
+                setClassName(BuildConfig.APPLICATION_ID, "moe.chenxy.oppopods.ConnectionPopupActivity")
+                putExtra("status", batteryParams)
+                putExtra("device_name", currentDeviceDisplayName())
+                putExtra(
+                    OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS,
+                    connectionPopupDismissSeconds
+                )
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                context.startActivity(this)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to show connection popup", e)
+        }
+    }
+
+    private fun currentDeviceDisplayName(): String {
+        return if (::mDevice.isInitialized) {
+            mDevice.alias?.takeIf { it.isNotBlank() }
+                ?: mDevice.name
+                ?: cachedDeviceName
+        } else {
+            cachedDeviceName
+        }
     }
 
     private val routeCallback = object : MediaRouter2.RouteCallback() {
@@ -290,15 +370,6 @@ object RfcommController {
         mediaRouter.unregisterRouteCallback(routeCallback)
     }
 
-    /**
-     * Create RFCOMM socket to OPPO earphone on channel 15 via reflection.
-     */
-    @SuppressLint("DiscouragedPrivateApi")
-    private fun createRfcommSocket(device: BluetoothDevice): BluetoothSocket {
-        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-        return method.invoke(device, RFCOMM_CHANNEL) as BluetoothSocket
-    }
-
     fun connectPod(context: Context, device: BluetoothDevice, prefs: SharedPreferences) {
         mContext = context
         mDevice = device
@@ -306,21 +377,27 @@ object RfcommController {
         cachedDeviceName = device.name ?: ""
         // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
         adaptiveModeEnabled = mPrefs.getBoolean("adaptive_mode", true)
-        showConnectionNotificationEnabled =
-            mPrefs.getBoolean(OppoPodsPrefsKey.SHOW_CONNECTION_NOTIFICATION, true)
-        notificationIslandStyleEnabled =
-            mPrefs.getBoolean(OppoPodsPrefsKey.NOTIFICATION_ISLAND_STYLE, true)
+        gameModeImplementation = GameModeImplementation.fromPreference(
+            mPrefs.getString(GameModeImplementation.PREF_KEY, null)
+        )
+        notificationSettings = NotificationSettings.fromPrefs(mPrefs)
+        rfcommConnectionMethod = RfcommConnectionMethod.fromPreference(
+            mPrefs.getString(RfcommConnectionMethod.PREF_KEY, null)
+        )
         Log.d(TAG, "Adaptive mode initial: $adaptiveModeEnabled")
         Log.d(
             TAG,
-            "Notification settings initial: show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
+            "Notification settings initial: batteryIsland=$showConnectionBatteryIslandEnabled, popup=$showConnectionPopupEnabled, popupDismiss=${connectionPopupDismissSeconds}s, show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
         )
+        Log.d(TAG, "Game mode implementation initial: ${gameModeImplementation.preferenceValue}")
+        Log.d(TAG, "RFCOMM connection method initial: ${rfcommConnectionMethod.preferenceValue}")
 
         context.registerReceiver(broadcastReceiver, IntentFilter().apply {
             this.addAction(OppoPodsAction.ACTION_ANC_SELECT)
             this.addAction(OppoPodsAction.ACTION_PODS_UI_INIT)
             this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
+            this.addAction(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED)
             this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
             this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
             this.addAction(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED)
@@ -340,43 +417,30 @@ object RfcommController {
         mediaRouter = MediaRouter2.getInstance(mContext!!)
         startRoutesScan()
 
-        isConnected = true
+        isPodConnected = true
 
-        // Start persistent connection and battery polling
+        // Start persistent RFCOMM connection and battery polling
         CoroutineScope(Dispatchers.IO).launch {
-            delay(500)
-            try {
-                socket = createRfcommSocket(device)
-                socket!!.connect()
-                Log.d(TAG, "RFCOMM connected!")
+            var initialConnected = connectRfcomm("initial connect")
+            if (!initialConnected) {
+                delay(500)
+                initialConnected = connectRfcomm("initial connect retry")
+            }
 
-                // Start reader thread
-                startPacketReader(socket!!.inputStream)
-
-                // Initial status query (combo: battery wake + mode)
-                delay(300)
-                queryStatus()
-
-                // Auto-enable game mode if preference is set.
-                // Read remote module preferences since this runs in com.android.bluetooth.
-                if (mPrefs.getBoolean("auto_game_mode", false)) {
-                    delay(100)
-                    sendPacketSafe(Enums.GAME_MODE_ON)
-                }
-            } catch (e: IOException) {
-                Log.e(TAG, "RFCOMM connect failed", e)
-                isConnected = false
-                return@launch
+            if (initialConnected) {
+                sendStatusQueryPackets()
+            } else {
+                Log.w(TAG, "Initial RFCOMM connect failed; will retry on the next control/query operation")
             }
         }
 
         // Start battery polling
         batteryPollJob = CoroutineScope(Dispatchers.IO).launch {
             delay(2000) // Wait for initial connection
-            while (isConnected) {
+            while (isPodConnected) {
                 delay(BATTERY_POLL_INTERVAL_MS)
-                if (isConnected) {
-                    queryStatus()
+                if (isPodConnected) {
+                    queryStatus(allowReconnect = false)
                 }
             }
         }
@@ -410,24 +474,114 @@ object RfcommController {
         putExtra("case_connected", status.case?.isConnected == true)
     }
 
-    private fun startPacketReader(inputStream: InputStream) {
+    private fun refreshRfcommConnectionMethod() {
+        if (::mPrefs.isInitialized) {
+            rfcommConnectionMethod = RfcommConnectionMethod.fromPreference(
+                mPrefs.getString(RfcommConnectionMethod.PREF_KEY, null)
+            )
+        }
+    }
+
+    private fun connectRfcomm(reason: String): Boolean {
+        if (!isPodConnected || mContext == null || !::mDevice.isInitialized) {
+            Log.d(TAG, "Skip RFCOMM connect: podConnected=$isPodConnected, reason=$reason")
+            return false
+        }
+
+        synchronized(rfcommLock) {
+            if (isRfcommConnected && socket != null) {
+                return true
+            }
+
+            refreshRfcommConnectionMethod()
+            closeRfcommSocketLocked()
+
+            return try {
+                Log.d(
+                    TAG,
+                    "RFCOMM connecting: reason=$reason, method=${rfcommConnectionMethod.preferenceValue}"
+                )
+                val connectedSocket = OppoRfcommSocketFactory.connect(
+                    mDevice,
+                    TAG,
+                    rfcommConnectionMethod
+                )
+                socket = connectedSocket
+                isRfcommConnected = true
+                startPacketReader(connectedSocket)
+                Log.d(TAG, "RFCOMM connected: reason=$reason")
+                refreshPodsNotification()
+                true
+            } catch (e: IOException) {
+                Log.e(TAG, "RFCOMM connect failed: reason=$reason", e)
+                closeRfcommSocketLocked()
+                false
+            }
+        }
+    }
+
+    private fun closeRfcommSocketLocked() {
+        try {
+            socket?.close()
+        } catch (e: IOException) {
+            Log.w(TAG, "RFCOMM socket close failed", e)
+        } finally {
+            socket = null
+            isRfcommConnected = false
+        }
+    }
+
+    private fun markRfcommDisconnected(
+        reason: String,
+        failedSocket: BluetoothSocket? = null,
+        error: Throwable? = null
+    ) {
+        if (error != null) {
+            Log.e(TAG, "RFCOMM disconnected: $reason", error)
+        } else {
+            Log.d(TAG, "RFCOMM disconnected: $reason")
+        }
+
+        synchronized(rfcommLock) {
+            if (failedSocket == null || socket === failedSocket) {
+                closeRfcommSocketLocked()
+                refreshPodsNotification()
+            }
+        }
+    }
+
+    private fun isActiveRfcommSocket(targetSocket: BluetoothSocket): Boolean {
+        return synchronized(rfcommLock) {
+            isRfcommConnected && socket === targetSocket
+        }
+    }
+
+    private fun startPacketReader(readerSocket: BluetoothSocket) {
         CoroutineScope(Dispatchers.IO).launch {
             val buffer = ByteArray(1024)
+            val framer = OppoPacketFramer()
             try {
-                while (isConnected) {
+                val inputStream = readerSocket.inputStream
+                while (isPodConnected && isActiveRfcommSocket(readerSocket)) {
                     val bytesRead = inputStream.read(buffer)
                     if (bytesRead > 0) {
-                        val packet = buffer.copyOfRange(0, bytesRead)
-                        handleOppoPacket(packet)
+                        framer.append(buffer, bytesRead).forEach { packet ->
+                            handleOppoPacket(packet)
+                        }
                     } else if (bytesRead == -1) {
                         Log.d(TAG, "RFCOMM stream ended")
                         break
                     }
                 }
             } catch (e: IOException) {
-                if (isConnected) {
-                    Log.e(TAG, "RFCOMM read error", e)
+                if (isPodConnected && isActiveRfcommSocket(readerSocket)) {
+                    markRfcommDisconnected("read error", readerSocket, e)
                 }
+                return@launch
+            }
+
+            if (isPodConnected && isActiveRfcommSocket(readerSocket)) {
+                markRfcommDisconnected("reader stopped", readerSocket)
             }
         }
     }
@@ -448,7 +602,7 @@ object RfcommController {
         // Try parse as active battery report (unsolicited, Cmd=0x0204, type=0x01)
         val activeResult = BatteryParser.parseActiveReport(packet)
         if (activeResult != null) {
-            handleBatteryChanged(activeResult)
+            handleBatteryChanged(activeResult, preserveMissing = true)
             return
         }
 
@@ -467,11 +621,18 @@ object RfcommController {
         }
 
         // Try parse as batch query response for game mode (Cmd=0x810D)
-        val gameModeResult = GameModeParser.parse(packet)
+        val gameModeResult = GameModeParser.parse(packet, gameModeImplementation)
         if (gameModeResult != null) {
             Log.d(TAG, "Game mode received: $gameModeResult")
+            lastGameModeStatusUpdateMs = SystemClock.elapsedRealtime()
             currentGameMode = gameModeResult
             changeUIGameModeStatus(gameModeResult)
+            return
+        }
+
+        val setFeatureResult = SwitchFeatureSetParser.parse(packet)
+        if (setFeatureResult != null) {
+            Log.d(TAG, "Switch feature response: status=${setFeatureResult.status}, value=${setFeatureResult.value}")
             return
         }
 
@@ -482,18 +643,19 @@ object RfcommController {
     }
 
     fun disconnectedPod(context: Context, device: BluetoothDevice) {
-        isConnected = false
+        isPodConnected = false
         batteryPollJob?.cancel()
 
-        try {
-            socket?.close()
-        } catch (_: IOException) {}
-        socket = null
+        synchronized(rfcommLock) {
+            closeRfcommSocketLocked()
+        }
 
         mContext?.let {
             stopRoutesScan()
             cancelPodsNotificationByMiuiBt(context, device)
             Intent(OppoPodsAction.ACTION_PODS_DISCONNECTED).apply {
+                this.`package` = BuildConfig.APPLICATION_ID
+                this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                 context.sendBroadcast(this)
             }
             it.unregisterReceiver(broadcastReceiver)
@@ -507,21 +669,53 @@ object RfcommController {
         MediaControl.mContext = null
     }
 
-    private fun sendPacketSafe(packet: ByteArray) {
+    private fun writePacket(targetSocket: BluetoothSocket, packet: ByteArray, reason: String): Boolean {
         try {
-            socket?.outputStream?.write(packet)
-            socket?.outputStream?.flush()
+            targetSocket.outputStream.write(packet)
+            targetSocket.outputStream.flush()
+            return true
         } catch (e: IOException) {
-            Log.e(TAG, "Send packet failed", e)
+            markRfcommDisconnected("send failed: $reason", targetSocket, e)
+            return false
         }
+    }
+
+    private fun sendPacketSafe(
+        packet: ByteArray,
+        reason: String = "send packet",
+        allowReconnect: Boolean = true
+    ): Boolean {
+        if (allowReconnect) {
+            if (!connectRfcomm(reason)) return false
+        }
+
+        val targetSocket = synchronized(rfcommLock) { socket } ?: run {
+            Log.d(TAG, "Skip packet: RFCOMM disconnected and reconnect not allowed, reason=$reason")
+            return false
+        }
+
+        if (writePacket(targetSocket, packet, reason)) {
+            return true
+        }
+
+        if (!allowReconnect) return false
+        if (!connectRfcomm("$reason retry")) return false
+
+        val retrySocket = synchronized(rfcommLock) { socket } ?: return false
+        return writePacket(retrySocket, packet, "$reason retry")
     }
 
     fun setGameMode(enabled: Boolean) {
         Log.d(TAG, "setGameMode: $enabled")
+        if (currentGameMode == enabled) {
+            changeUIGameModeStatus(enabled)
+            Log.d(TAG, "setGameMode skipped duplicate: $enabled")
+            return
+        }
         currentGameMode = enabled
-        val packet = if (enabled) Enums.GAME_MODE_ON else Enums.GAME_MODE_OFF
+        changeUIGameModeStatus(enabled)
         CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(packet)
+            sendGameModePackets(enabled)
         }
     }
 
@@ -547,26 +741,37 @@ object RfcommController {
             else -> return
         }
         CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(packet)
+            sendPacketSafe(packet, "set ANC mode")
         }
     }
 
-    fun queryBattery() {
+    fun queryBattery(allowReconnect: Boolean = false) {
         CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(Enums.QUERY_BATTERY)
+            sendPacketSafe(Enums.QUERY_BATTERY, "query battery", allowReconnect)
         }
+    }
+
+    private suspend fun sendGameModePackets(enabled: Boolean) {
+        for ((index, packet) in Enums.gameModePackets(enabled, gameModeImplementation).withIndex()) {
+            if (index > 0) delay(120)
+            if (!sendPacketSafe(packet, "set game mode")) return
+        }
+    }
+
+    private suspend fun sendStatusQueryPackets(allowReconnect: Boolean = false) {
+        if (!sendPacketSafe(Enums.QUERY_STATUS, "query status", allowReconnect)) return
+        delay(50)
+        if (!sendPacketSafe(Enums.QUERY_BATTERY, "query battery", allowReconnect)) return
+        delay(50)
+        sendPacketSafe(Enums.QUERY_ANC, "query ANC", allowReconnect)
     }
 
     /**
      * Combo query strategy: send batch query (wake + game mode), then battery, then ANC.
      */
-    fun queryStatus() {
+    fun queryStatus(allowReconnect: Boolean = false) {
         CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(Enums.QUERY_STATUS)
-            delay(50)
-            sendPacketSafe(Enums.QUERY_BATTERY)
-            delay(50)
-            sendPacketSafe(Enums.QUERY_ANC)
+            sendStatusQueryPackets(allowReconnect)
         }
     }
 
@@ -605,6 +810,7 @@ object RfcommController {
     }
 
     fun connectAudio(context: Context, device: BluetoothDevice?) {
+        val targetDevice = device ?: return
         val bluetoothAdapter = context.getSystemService(BluetoothManager::class.java).adapter
 
         bluetoothAdapter?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
@@ -612,7 +818,7 @@ object RfcommController {
                 if (profile == BluetoothProfile.HEADSET) {
                     try {
                         val method = proxy.javaClass.getMethod("connect", BluetoothDevice::class.java)
-                        method.invoke(proxy, device)
+                        method.invoke(proxy, targetDevice)
                     } catch (e: Exception) {
                         e.printStackTrace()
                     } finally {
@@ -624,7 +830,7 @@ object RfcommController {
         }, BluetoothProfile.HEADSET)
 
         for (route in routes) {
-            if (route.type == MediaRoute2Info.TYPE_BLUETOOTH_A2DP && route.name == device!!.name) {
+            if (route.type == MediaRoute2Info.TYPE_BLUETOOTH_A2DP && route.name == targetDevice.name) {
                 Log.d(TAG, "found bt route $route")
                 mediaRouter.transferTo(route)
             }
