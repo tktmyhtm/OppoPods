@@ -1,4 +1,4 @@
-package moe.chenxy.oppopods.pods
+﻿package moe.chenxy.oppopods.pods
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -133,3 +133,4 @@ class AppRfcommController {
         _deviceName.value = ""
     }
 }
+
