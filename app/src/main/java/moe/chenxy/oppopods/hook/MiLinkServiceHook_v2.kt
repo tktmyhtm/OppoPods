@@ -41,7 +41,7 @@ object MiLinkServiceHook : HookContext() {
     private var lastStatusRequestMs = 0L
     private val STATUS_REQUEST_INTERVAL_MS = 5000L
 
-    private fun throttledBroadcast(action: String, packageName: String, intervalMs: Long, extras: Intent.() -> Unit) {
+    private fun throttledBroadcast(action: String, intervalMs: Long, extras: Intent.() -> Unit) {
         val now = SystemClock.elapsedRealtime()
         val lastVar = when (action) {
             OppoPodsAction.ACTION_PODS_BATTERY_CHANGED -> lastBatteryBroadcastMs
@@ -60,7 +60,6 @@ object MiLinkServiceHook : HookContext() {
         val ctx = context ?: return
         ctx.sendBroadcast(Intent(action).apply {
             extras()
-            setPackage(packageName)
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
     }
@@ -332,7 +331,7 @@ object MiLinkServiceHook : HookContext() {
     }
 
     private fun requestBluetoothStatus(reason: String, allowReconnect: Boolean = false) {
-        throttledBroadcast(OppoPodsAction.ACTION_REFRESH_STATUS, "com.android.bluetooth", STATUS_REQUEST_INTERVAL_MS) {
+        throttledBroadcast(OppoPodsAction.ACTION_REFRESH_STATUS, STATUS_REQUEST_INTERVAL_MS) {
             putExtra(OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT, allowReconnect)
         }
     }
@@ -419,19 +418,19 @@ object MiLinkServiceHook : HookContext() {
 
     private fun sendOppoAnc(mode: Int, fallbackContext: Context? = null) {
         val ctx = fallbackContext ?: context ?: return
-        throttledBroadcast(OppoPodsAction.ACTION_ANC_SELECT, "com.android.bluetooth", ANC_BROADCAST_INTERVAL_MS) {
+        throttledBroadcast(OppoPodsAction.ACTION_ANC_SELECT, ANC_BROADCAST_INTERVAL_MS) {
             putExtra("status", mode)
         }
     }
 
     private fun sendOppoGameMode(enabled: Boolean, fallbackContext: Context? = null) {
-        throttledBroadcast(OppoPodsAction.ACTION_GAME_MODE_SET, "com.android.bluetooth", GAME_MODE_BROADCAST_INTERVAL_MS) {
+        throttledBroadcast(OppoPodsAction.ACTION_GAME_MODE_SET, GAME_MODE_BROADCAST_INTERVAL_MS) {
             putExtra("enabled", enabled)
         }
     }
 
     private fun sendMiLinkAncChanged(mode: Int, fallbackContext: Context? = null) {
-        throttledBroadcast(OppoPodsAction.ACTION_PODS_ANC_CHANGED, "com.milink.service", ANC_BROADCAST_INTERVAL_MS) {
+        throttledBroadcast(OppoPodsAction.ACTION_PODS_ANC_CHANGED, ANC_BROADCAST_INTERVAL_MS) {
             putExtra("status", mode)
         }
     }
