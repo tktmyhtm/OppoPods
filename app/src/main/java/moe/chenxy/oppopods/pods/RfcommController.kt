@@ -1,877 +1,239 @@
 package moe.chenxy.oppopods.pods
 
 import android.annotation.SuppressLint
-import android.app.StatusBarManager
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothProfile
-import android.bluetooth.BluetoothSocket
+import android.bluetooth.*
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.media.AudioManager
-import android.media.MediaRoute2Info
-import android.media.MediaRouter2
-import android.media.RouteDiscoveryPreference
-import android.os.SystemClock
-import android.util.Log
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import moe.chenxy.oppopods.BuildConfig
-import moe.chenxy.oppopods.utils.MediaControl
-import moe.chenxy.oppopods.utils.SystemApisUtils
-import moe.chenxy.oppopods.utils.SystemApisUtils.setIconVisibility
-import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil
-import moe.chenxy.oppopods.utils.miuiStrongToast.MiuiStrongToastUtil.cancelPodsNotificationByMiuiBt
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.NotificationSettings
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsPrefsKey
-import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
-import java.io.IOException
 import android.content.SharedPreferences
-import java.util.concurrent.Executor
+import android.util.Log
+import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import java.util.UUID
 
-@SuppressLint("MissingPermission", "StaticFieldLeak")
+@SuppressLint("MissingPermission")
 object RfcommController {
-    private const val TAG = "OppoPods-RfcommController"
-    private const val BATTERY_POLL_INTERVAL_MS = 30_000L
+    private const val TAG = "OppoPods-GATT"
+    
+    // 🎯 直接挂载咱们挖出来的华为 FreeBuds 真实 BLE GATT 通信矩阵！
+    private val UUID_SERVICE = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
+    private val UUID_NOTIFY = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
+    private val UUID_WRITE = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
+    private val UUID_DESCR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb") // 开启监听的标准描述符
 
-    // Basic Objects
-    private val rfcommLock = Any()
-    private var socket: BluetoothSocket? = null
-    private var mContext: Context? = null
-    lateinit var mDevice: BluetoothDevice
-    private val audioManager: AudioManager? by lazy {
-        mContext?.getSystemService(AudioManager::class.java)
+    private var currentGatt: BluetoothGatt? = null
+    private var writeChar: BluetoothGattCharacteristic? = null
+    private var isConnected = false
+    private var context: Context? = null
+    private var currentDevice: BluetoothDevice? = null
+    private var commandReceiver: BroadcastReceiver? = null
+    
+    private val framer = OppoPacketFramer()
+
+    fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
+        context = ctx.applicationContext
+        currentDevice = device
+        
+        Log.d(TAG, "LSPosed引擎 -> 彻底抛弃旧串口，启动纯血华为 BLE GATT 协议栈: ${device.address}")
+        
+        disconnect()
+        registerReceiver()
+        
+        // Android 16/HyperOS 特权进程直接发起无感低功耗并网！
+        currentGatt = device.connectGatt(context, false, gattCallback)
     }
-    private lateinit var mPrefs: SharedPreferences
 
-    private var scanToken: MediaRouter2.ScanToken? = null
-    var routes: List<MediaRoute2Info> = listOf()
-    private lateinit var mediaRouter: MediaRouter2
-
-    // Status
-    private var mShowedConnectedToast = false
-    @Volatile
-    private var isPodConnected = false
-    @Volatile
-    private var isRfcommConnected = false
-    private var lastTempBatt = 0
-    lateinit var currentBatteryParams: BatteryParams
-    private var currentAnc: Int = 1
-    private var currentGameMode: Boolean = false
-    private var gameModeImplementation: GameModeImplementation = GameModeImplementation.STANDARD
-    private var rfcommConnectionMethod: RfcommConnectionMethod = RfcommConnectionMethod.UUID
-    private var lastGameModeStatusUpdateMs: Long = 0L
-    // Adaptive模式状态缓存，通过广播同步确保跨进程实时一致，避免 SharedPreferences 跨进程缓存导致读取过时值
-    private var adaptiveModeEnabled: Boolean = true
-    private var notificationSettings: NotificationSettings = NotificationSettings()
-    private val showConnectionBatteryIslandEnabled: Boolean
-        get() = notificationSettings.showConnectionBatteryIsland
-    private val showConnectionPopupEnabled: Boolean
-        get() = notificationSettings.showConnectionPopup
-    private val connectionPopupDismissSeconds: Int
-        get() = notificationSettings.connectionPopupDismissSeconds
-    private val showConnectionNotificationEnabled: Boolean
-        get() = notificationSettings.showConnectionNotification
-    private val notificationIslandStyleEnabled: Boolean
-        get() = notificationSettings.notificationIslandStyle
-    private var lastKnownCaseBattery: Int = 0
-    private var lastKnownCaseCharging: Boolean = false
-    private var cachedDeviceName: String = ""
-
-    // Polling job
-    private var batteryPollJob: kotlinx.coroutines.Job? = null
-
-    private val broadcastReceiver = object : BroadcastReceiver() {
-        override fun onReceive(p0: Context?, p1: Intent?) {
-            p1?.let { handleUIEvent(it) }
+    fun disconnectedPod(ctx: Context, device: BluetoothDevice) {
+        if (currentDevice?.address == device.address) {
+            disconnect()
+            broadcastDisconnected(ctx, device)
         }
     }
 
-    private fun changeUIAncStatus(status: Int) {
-        if (status < 1 || status > 4) return
-        Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
-            this.putExtra("status", status)
-            this.`package` = BuildConfig.APPLICATION_ID
-            this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            mContext!!.sendBroadcast(this)
-        }
-        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_ANC_CHANGED) {
-            putExtra("status", status)
-        }
-    }
-
-    private fun changeUIBatteryStatus(status: BatteryParams) {
-        Intent(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED).apply {
-            this.putExtra("status", status)
-            putBatteryExtras(status)
-            this.`package` = BuildConfig.APPLICATION_ID
-            this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            mContext!!.sendBroadcast(this)
-        }
-        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED) {
-            putExtra("status", status)
-            putBatteryExtras(status)
-        }
-    }
-
-    private fun changeUIGameModeStatus(enabled: Boolean) {
-        Intent(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED).apply {
-            this.putExtra("enabled", enabled)
-            this.`package` = BuildConfig.APPLICATION_ID
-            this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            mContext!!.sendBroadcast(this)
-        }
-        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_GAME_MODE_CHANGED) {
-            putExtra("enabled", enabled)
-        }
-    }
-
-    private fun refreshPodsNotification() {
-        val context = mContext ?: return
-        if (!::mDevice.isInitialized) return
-
-        if (!showConnectionNotificationEnabled) {
-            cancelPodsNotificationByMiuiBt(context, mDevice)
-            return
-        }
-
-        if (!::currentBatteryParams.isInitialized) return
-        MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
-            context,
-            currentBatteryParams,
-            mDevice,
-            notificationSettings,
-            isRfcommConnected
-        )
-    }
-
-    fun handleUIEvent(intent: Intent) {
-        when (intent.action) {
-            OppoPodsAction.ACTION_PODS_UI_INIT -> {
-                Log.i(TAG, "UI Init")
-                if (::currentBatteryParams.isInitialized)
-                    changeUIBatteryStatus(currentBatteryParams)
-                changeUIAncStatus(currentAnc)
-                changeUIGameModeStatus(currentGameMode)
-                Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {
-                    this.putExtra("device_name", mDevice.name ?: cachedDeviceName)
-                    this.`package` = BuildConfig.APPLICATION_ID
-                    this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                    mContext!!.sendBroadcast(this)
-                }
-                sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_CONNECTED) {
-                    putExtra("device_name", mDevice.name ?: cachedDeviceName)
-                }
-            }
-            OppoPodsAction.ACTION_ANC_SELECT -> {
-                val status = intent.getIntExtra("status", 0)
-                setANCMode(status)
-            }
-            OppoPodsAction.ACTION_REFRESH_STATUS -> {
-                val allowReconnect = intent.getBooleanExtra(
-                    OppoPodsAction.EXTRA_ALLOW_RFCOMM_RECONNECT,
-                    false
-                )
-                queryStatus(allowReconnect)
-            }
-            OppoPodsAction.ACTION_GAME_MODE_SET -> {
-                val enabled = intent.getBooleanExtra("enabled", false)
-                setGameMode(enabled)
-            }
-            OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED -> {
-                gameModeImplementation = GameModeImplementation.fromPreference(
-                    intent.getStringExtra(GameModeImplementation.PREF_KEY)
-                )
-                Log.d(TAG, "Game mode implementation synced: ${gameModeImplementation.preferenceValue}")
-            }
-            OppoPodsAction.ACTION_CYCLE_ANC -> {
-                cycleAnc()
-            }
-            OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED -> {
-                // 跨进程同步 Adaptive 模式开关状态，确保 cycleAnc() 使用实时值
-                adaptiveModeEnabled = intent.getBooleanExtra("enabled", true)
-                Log.d(TAG, "Adaptive mode synced: $adaptiveModeEnabled")
-                // 若关闭 Adaptive 且当前处于 Adaptive 模式，自动切换至降噪模式
-                if (!adaptiveModeEnabled && currentAnc == 4) {
-                    setANCMode(2)
-                }
-            }
-            OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED -> {
-                notificationSettings = NotificationSettings.fromIntent(intent, notificationSettings)
-                Log.d(
-                    TAG,
-                    "Notification settings synced: batteryIsland=$showConnectionBatteryIslandEnabled, popup=$showConnectionPopupEnabled, popupDismiss=${connectionPopupDismissSeconds}s, show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
-                )
-                refreshPodsNotification()
-            }
-        }
-    }
-
-    private fun currentBatterySnapshot(): BatteryParams {
-        return if (::currentBatteryParams.isInitialized) {
-            BatteryParams(
-                currentBatteryParams.left?.copy(),
-                currentBatteryParams.right?.copy(),
-                currentBatteryParams.case?.copy()
-            )
-        } else {
-            BatteryParams()
-        }
-    }
-
-    private fun batteryInfoToPodParams(
-        info: BatteryParser.BatteryInfo?,
-        previous: PodParams?,
-        preserveMissing: Boolean
-    ): PodParams {
-        if (info != null) {
-            return PodParams(info.level, info.isCharging, true, previous?.rawStatus ?: 0)
-        }
-        if (preserveMissing && previous != null) return previous.copy()
-        return PodParams(0, false, false, previous?.rawStatus ?: 0)
-    }
-
-    private fun caseInfoToPodParams(
-        info: BatteryParser.BatteryInfo?,
-        previous: PodParams?,
-        preserveMissing: Boolean
-    ): PodParams {
-        if (info != null) {
-            lastKnownCaseBattery = info.level
-            lastKnownCaseCharging = info.isCharging
-            return PodParams(info.level, info.isCharging, true, previous?.rawStatus ?: 0)
-        }
-        if (preserveMissing && previous != null) return previous.copy()
-        return PodParams(lastKnownCaseBattery, lastKnownCaseCharging, false, previous?.rawStatus ?: 0)
-    }
-
-    fun handleBatteryChanged(result: BatteryParser.BatteryResult, preserveMissing: Boolean = false) {
-        val previous = currentBatterySnapshot()
-        val batteryParams = BatteryParams(
-            left = batteryInfoToPodParams(result.left, previous.left, preserveMissing),
-            right = batteryInfoToPodParams(result.right, previous.right, preserveMissing),
-            case = caseInfoToPodParams(result.case, previous.case, preserveMissing)
-        )
-        publishBatteryParams(batteryParams)
-    }
-
-    @OptIn(ExperimentalStdlibApi::class)
-    private fun publishBatteryParams(batteryParams: BatteryParams) {
-        val context = mContext ?: return
-        val left = batteryParams.left ?: PodParams()
-        val right = batteryParams.right ?: PodParams()
-        val case = batteryParams.case ?: PodParams()
-
-        if (BuildConfig.DEBUG) {
-            Log.v(
-                TAG,
-                "batt left ${left.battery}/${left.isCharging} right ${right.battery}/${right.isCharging} case ${case.battery}/${case.isCharging}"
-            )
-        }
-
-        val shouldShowToast = !mShowedConnectedToast
-        if (shouldShowToast) {
-            // Wait until at least one connected ear has valid battery data
-            val hasValidData = (left.isConnected && left.battery > 0) ||
-                    (right.isConnected && right.battery > 0)
-            if (!hasValidData) return
-        }
-
-        currentBatteryParams = batteryParams
-
-        if (shouldShowToast) {
-            mShowedConnectedToast = true
-            if (showConnectionBatteryIslandEnabled) {
-                MiuiStrongToastUtil.showPodsBatteryToastByMiuiBt(
-                    context,
-                    batteryParams
-                )
-            }
-            if (showConnectionPopupEnabled) {
-                showConnectionPopup(context, batteryParams)
-            }
-        }
-        if (showConnectionNotificationEnabled) {
-            MiuiStrongToastUtil.showPodsNotificationByMiuiBt(
-                context,
-                batteryParams,
-                mDevice,
-                notificationSettings,
-                isRfcommConnected
-            )
-        } else {
-            cancelPodsNotificationByMiuiBt(context, mDevice)
-        }
-        changeUIBatteryStatus(batteryParams)
-
-        lastTempBatt = if (left.isConnected && right.isConnected)
-            minOf(left.battery, right.battery)
-        else if (left.isConnected)
-            left.battery
-        else if (right.isConnected)
-            right.battery
-        else SystemApisUtils.BATTERY_LEVEL_UNKNOWN
-
-        setRegularBatteryLevel(lastTempBatt)
-    }
-
-    private fun showConnectionPopup(context: Context, batteryParams: BatteryParams) {
+    private fun disconnect() {
         try {
-            Intent().apply {
-                setClassName(BuildConfig.APPLICATION_ID, "moe.chenxy.oppopods.ConnectionPopupActivity")
-                putExtra("status", batteryParams)
-                putExtra("device_name", currentDeviceDisplayName())
-                putExtra(
-                    OppoPodsPrefsKey.CONNECTION_POPUP_DISMISS_SECONDS,
-                    connectionPopupDismissSeconds
-                )
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                context.startActivity(this)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to show connection popup", e)
-        }
+            currentGatt?.disconnect()
+            currentGatt?.close()
+        } catch (e: Exception) {}
+        currentGatt = null
+        writeChar = null
+        isConnected = false
     }
 
-    private fun currentDeviceDisplayName(): String {
-        return if (::mDevice.isInitialized) {
-            mDevice.alias?.takeIf { it.isNotBlank() }
-                ?: mDevice.name
-                ?: cachedDeviceName
-        } else {
-            cachedDeviceName
-        }
-    }
-
-    private val routeCallback = object : MediaRouter2.RouteCallback() {
-        override fun onRoutesUpdated(routes: List<MediaRoute2Info>) {
-            Log.v(TAG, "routes updated: $routes")
-            this@RfcommController.routes = routes
-        }
-    }
-
-    private fun startRoutesScan() {
-        val executor = Executor { p0 ->
-            CoroutineScope(Dispatchers.IO).launch { p0?.run() }
-        }
-        val preferredFeature = listOf(MediaRoute2Info.FEATURE_LIVE_AUDIO, MediaRoute2Info.FEATURE_LIVE_VIDEO)
-        mediaRouter.registerRouteCallback(executor, routeCallback, RouteDiscoveryPreference.Builder(preferredFeature, true).build())
-        scanToken = mediaRouter.requestScan(MediaRouter2.ScanRequest.Builder().build())
-    }
-
-    private fun stopRoutesScan() {
-        scanToken?.let { mediaRouter.cancelScanRequest(it) }
-        mediaRouter.unregisterRouteCallback(routeCallback)
-    }
-
-    fun connectPod(context: Context, device: BluetoothDevice, prefs: SharedPreferences) {
-        mContext = context
-        mDevice = device
-        mPrefs = prefs
-        cachedDeviceName = device.name ?: ""
-        // 初始化 Adaptive 模式状态缓存，从 SharedPreferences 读取当前值
-        adaptiveModeEnabled = mPrefs.getBoolean("adaptive_mode", true)
-        gameModeImplementation = GameModeImplementation.fromPreference(
-            mPrefs.getString(GameModeImplementation.PREF_KEY, null)
-        )
-        notificationSettings = NotificationSettings.fromPrefs(mPrefs)
-        rfcommConnectionMethod = RfcommConnectionMethod.fromPreference(
-            mPrefs.getString(RfcommConnectionMethod.PREF_KEY, null)
-        )
-        Log.d(TAG, "Adaptive mode initial: $adaptiveModeEnabled")
-        Log.d(
-            TAG,
-            "Notification settings initial: batteryIsland=$showConnectionBatteryIslandEnabled, popup=$showConnectionPopupEnabled, popupDismiss=${connectionPopupDismissSeconds}s, show=$showConnectionNotificationEnabled, island=$notificationIslandStyleEnabled"
-        )
-        Log.d(TAG, "Game mode implementation initial: ${gameModeImplementation.preferenceValue}")
-        Log.d(TAG, "RFCOMM connection method initial: ${rfcommConnectionMethod.preferenceValue}")
-
-        context.registerReceiver(broadcastReceiver, IntentFilter().apply {
-            this.addAction(OppoPodsAction.ACTION_ANC_SELECT)
-            this.addAction(OppoPodsAction.ACTION_PODS_UI_INIT)
-            this.addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
-            this.addAction(OppoPodsAction.ACTION_GAME_MODE_SET)
-            this.addAction(OppoPodsAction.ACTION_GAME_MODE_IMPLEMENTATION_CHANGED)
-            this.addAction(OppoPodsAction.ACTION_CYCLE_ANC)
-            this.addAction(OppoPodsAction.ACTION_ADAPTIVE_MODE_CHANGED)
-            this.addAction(OppoPodsAction.ACTION_NOTIFICATION_SETTINGS_CHANGED)
-        }, Context.RECEIVER_EXPORTED)
-
-        Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {
-            this.putExtra("device_name", cachedDeviceName)
-            this.`package` = BuildConfig.APPLICATION_ID
-            this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-            context.sendBroadcast(this)
-        }
-        sendExternalPodsStatusBroadcast(OppoPodsAction.ACTION_PODS_CONNECTED) {
-            putExtra("device_name", cachedDeviceName)
-        }
-
-        MediaControl.mContext = mContext
-        mediaRouter = MediaRouter2.getInstance(mContext!!)
-        startRoutesScan()
-
-        isPodConnected = true
-
-        // Start persistent RFCOMM connection and battery polling
-        CoroutineScope(Dispatchers.IO).launch {
-            var initialConnected = connectRfcomm("initial connect")
-            if (!initialConnected) {
-                delay(500)
-                initialConnected = connectRfcomm("initial connect retry")
-            }
-
-            if (initialConnected) {
-                sendStatusQueryPackets()
-            } else {
-                Log.w(TAG, "Initial RFCOMM connect failed; will retry on the next control/query operation")
-            }
-        }
-
-        // Start battery polling
-        batteryPollJob = CoroutineScope(Dispatchers.IO).launch {
-            delay(2000) // Wait for initial connection
-            while (isPodConnected) {
-                delay(BATTERY_POLL_INTERVAL_MS)
-                if (isPodConnected) {
-                    queryStatus(allowReconnect = false)
-                }
-            }
-        }
-    }
-
-    private fun sendExternalPodsStatusBroadcast(action: String, fill: Intent.() -> Unit = {}) {
-        val ctx = mContext ?: return
-        listOf("com.milink.service", "com.xiaomi.bluetooth", "com.android.settings").forEach { targetPackage ->
-            Intent(action).apply {
-                if (::mDevice.isInitialized) {
-                    putExtra("address", mDevice.address)
-                    putExtra("device_name", mDevice.name ?: cachedDeviceName)
-                }
-                fill()
-                setPackage(targetPackage)
-                addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                ctx.sendBroadcast(this)
-            }
-        }
-    }
-
-    private fun Intent.putBatteryExtras(status: BatteryParams) {
-        putExtra("left_battery", status.left?.battery ?: 0)
-        putExtra("left_charging", status.left?.isCharging == true)
-        putExtra("left_connected", status.left?.isConnected == true)
-        putExtra("right_battery", status.right?.battery ?: 0)
-        putExtra("right_charging", status.right?.isCharging == true)
-        putExtra("right_connected", status.right?.isConnected == true)
-        putExtra("case_battery", status.case?.battery ?: 0)
-        putExtra("case_charging", status.case?.isCharging == true)
-        putExtra("case_connected", status.case?.isConnected == true)
-    }
-
-    private fun refreshRfcommConnectionMethod() {
-        if (::mPrefs.isInitialized) {
-            rfcommConnectionMethod = RfcommConnectionMethod.fromPreference(
-                mPrefs.getString(RfcommConnectionMethod.PREF_KEY, null)
-            )
-        }
-    }
-
-    private fun connectRfcomm(reason: String): Boolean {
-        if (!isPodConnected || mContext == null || !::mDevice.isInitialized) {
-            Log.d(TAG, "Skip RFCOMM connect: podConnected=$isPodConnected, reason=$reason")
-            return false
-        }
-
-        synchronized(rfcommLock) {
-            if (isRfcommConnected && socket != null) {
-                return true
-            }
-
-            refreshRfcommConnectionMethod()
-            closeRfcommSocketLocked()
-
-            return try {
-                Log.d(
-                    TAG,
-                    "RFCOMM connecting: reason=$reason, method=${rfcommConnectionMethod.preferenceValue}"
-                )
-                val connectedSocket = OppoRfcommSocketFactory.connect(
-                    mDevice,
-                    TAG,
-                    rfcommConnectionMethod
-                )
-                socket = connectedSocket
-                isRfcommConnected = true
-                startPacketReader(connectedSocket)
-                Log.d(TAG, "RFCOMM connected: reason=$reason")
-                refreshPodsNotification()
-                true
-            } catch (e: IOException) {
-                Log.e(TAG, "RFCOMM connect failed: reason=$reason", e)
-                closeRfcommSocketLocked()
-                false
-            }
-        }
-    }
-
-    private fun closeRfcommSocketLocked() {
-        try {
-            socket?.close()
-        } catch (e: IOException) {
-            Log.w(TAG, "RFCOMM socket close failed", e)
-        } finally {
-            socket = null
-            isRfcommConnected = false
-        }
-    }
-
-    private fun markRfcommDisconnected(
-        reason: String,
-        failedSocket: BluetoothSocket? = null,
-        error: Throwable? = null
-    ) {
-        if (error != null) {
-            Log.e(TAG, "RFCOMM disconnected: $reason", error)
-        } else {
-            Log.d(TAG, "RFCOMM disconnected: $reason")
-        }
-
-        synchronized(rfcommLock) {
-            if (failedSocket == null || socket === failedSocket) {
-                closeRfcommSocketLocked()
-                refreshPodsNotification()
-            }
-        }
-    }
-
-    private fun isActiveRfcommSocket(targetSocket: BluetoothSocket): Boolean {
-        return synchronized(rfcommLock) {
-            isRfcommConnected && socket === targetSocket
-        }
-    }
-
-    private fun startPacketReader(readerSocket: BluetoothSocket) {
-        CoroutineScope(Dispatchers.IO).launch {
-            val buffer = ByteArray(1024)
-            val framer = OppoPacketFramer()
-            try {
-                val inputStream = readerSocket.inputStream
-                while (isPodConnected && isActiveRfcommSocket(readerSocket)) {
-                    val bytesRead = inputStream.read(buffer)
-                    if (bytesRead > 0) {
-                        framer.append(buffer, bytesRead).forEach { packet ->
-                            handleOppoPacket(packet)
+    private fun registerReceiver() {
+        if (commandReceiver == null) {
+            commandReceiver = object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, intent: Intent?) {
+                    when (intent?.action) {
+                        OppoPodsAction.ACTION_ANC_SELECT -> {
+                            val status = intent.getIntExtra("status", 1)
+                            val payload = when (status) {
+                                1 -> Enums.ANC_OFF
+                                2 -> Enums.ANC_NOISE_CANCEL
+                                3 -> Enums.ANC_TRANSPARENCY
+                                else -> Enums.ANC_OFF
+                            }
+                            sendCommand(payload)
                         }
-                    } else if (bytesRead == -1) {
-                        Log.d(TAG, "RFCOMM stream ended")
-                        break
+                        OppoPodsAction.ACTION_REFRESH_STATUS -> {
+                            sendCommand(Enums.QUERY_BATTERY)
+                            sendCommand(Enums.QUERY_ANC)
+                        }
                     }
                 }
-            } catch (e: IOException) {
-                if (isPodConnected && isActiveRfcommSocket(readerSocket)) {
-                    markRfcommDisconnected("read error", readerSocket, e)
-                }
-                return@launch
             }
-
-            if (isPodConnected && isActiveRfcommSocket(readerSocket)) {
-                markRfcommDisconnected("reader stopped", readerSocket)
+            val filter = IntentFilter().apply {
+                addAction(OppoPodsAction.ACTION_ANC_SELECT)
+                addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             }
+            context?.registerReceiver(commandReceiver, filter, Context.RECEIVER_EXPORTED)
         }
     }
 
-    @OptIn(ExperimentalStdlibApi::class)
-    private fun handleOppoPacket(packet: ByteArray) {
-        if (BuildConfig.DEBUG) {
-            Log.v(TAG, "Received: ${packet.toHexString(HexFormat.UpperCase)}")
-        }
-
-        // Try parse as battery response (query response, Cmd=0x8106)
-        val batteryResult = BatteryParser.parse(packet)
-        if (batteryResult != null) {
-            handleBatteryChanged(batteryResult)
-            return
-        }
-
-        // Try parse as active battery report (unsolicited, Cmd=0x0204, type=0x01)
-        val activeResult = BatteryParser.parseActiveReport(packet)
-        if (activeResult != null) {
-            handleBatteryChanged(activeResult, preserveMissing = true)
-            return
-        }
-
-        // Try parse as ANC mode response
-        val ancResult = AncModeParser.parse(packet)
-        if (ancResult != null) {
-            Log.d(TAG, "ANC mode received: $ancResult")
-            currentAnc = when (ancResult) {
-                NoiseControlMode.OFF -> 1
-                NoiseControlMode.NOISE_CANCELLATION -> 2
-                NoiseControlMode.TRANSPARENCY -> 3
-                NoiseControlMode.ADAPTIVE -> 4
-            }
-            changeUIAncStatus(currentAnc)
-            return
-        }
-
-        // Try parse as batch query response for game mode (Cmd=0x810D)
-        val gameModeResult = GameModeParser.parse(packet, gameModeImplementation)
-        if (gameModeResult != null) {
-            Log.d(TAG, "Game mode received: $gameModeResult")
-            lastGameModeStatusUpdateMs = SystemClock.elapsedRealtime()
-            currentGameMode = gameModeResult
-            changeUIGameModeStatus(gameModeResult)
-            return
-        }
-
-        val setFeatureResult = SwitchFeatureSetParser.parse(packet)
-        if (setFeatureResult != null) {
-            Log.d(TAG, "Switch feature response: status=${setFeatureResult.status}, value=${setFeatureResult.value}")
-            return
-        }
-
-        // Unknown packet - log in debug
-        if (BuildConfig.DEBUG) {
-            Log.v(TAG, "Unknown OPPO packet: ${packet.toHexString(HexFormat.UpperCase)}")
-        }
-    }
-
-    fun disconnectedPod(context: Context, device: BluetoothDevice) {
-        isPodConnected = false
-        batteryPollJob?.cancel()
-
-        synchronized(rfcommLock) {
-            closeRfcommSocketLocked()
-        }
-
-        mContext?.let {
-            stopRoutesScan()
-            cancelPodsNotificationByMiuiBt(context, device)
-            Intent(OppoPodsAction.ACTION_PODS_DISCONNECTED).apply {
-                this.`package` = BuildConfig.APPLICATION_ID
-                this.addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
-                context.sendBroadcast(this)
-            }
-            it.unregisterReceiver(broadcastReceiver)
-        }
-
-        mShowedConnectedToast = false
-        lastKnownCaseBattery = 0
-        lastKnownCaseCharging = false
-        cachedDeviceName = ""
-        mContext = null
-        MediaControl.mContext = null
-    }
-
-    private fun writePacket(targetSocket: BluetoothSocket, packet: ByteArray, reason: String): Boolean {
+    private fun sendCommand(cmd: ByteArray) {
+        val gatt = currentGatt ?: return
+        val char = writeChar ?: return
         try {
-            targetSocket.outputStream.write(packet)
-            targetSocket.outputStream.flush()
-            return true
-        } catch (e: IOException) {
-            markRfcommDisconnected("send failed: $reason", targetSocket, e)
-            return false
-        }
-    }
-
-    private fun sendPacketSafe(
-        packet: ByteArray,
-        reason: String = "send packet",
-        allowReconnect: Boolean = true
-    ): Boolean {
-        if (allowReconnect) {
-            if (!connectRfcomm(reason)) return false
-        }
-
-        val targetSocket = synchronized(rfcommLock) { socket } ?: run {
-            Log.d(TAG, "Skip packet: RFCOMM disconnected and reconnect not allowed, reason=$reason")
-            return false
-        }
-
-        if (writePacket(targetSocket, packet, reason)) {
-            return true
-        }
-
-        if (!allowReconnect) return false
-        if (!connectRfcomm("$reason retry")) return false
-
-        val retrySocket = synchronized(rfcommLock) { socket } ?: return false
-        return writePacket(retrySocket, packet, "$reason retry")
-    }
-
-    fun setGameMode(enabled: Boolean) {
-        Log.d(TAG, "setGameMode: $enabled")
-        if (currentGameMode == enabled) {
-            changeUIGameModeStatus(enabled)
-            Log.d(TAG, "setGameMode skipped duplicate: $enabled")
-            return
-        }
-        currentGameMode = enabled
-        changeUIGameModeStatus(enabled)
-        CoroutineScope(Dispatchers.IO).launch {
-            sendGameModePackets(enabled)
-        }
-    }
-
-    fun cycleAnc() {
-        // 使用广播同步的缓存值，避免 SharedPreferences 跨进程缓存导致读取过时值
-        val next = when (currentAnc) {
-            2 -> if (adaptiveModeEnabled) 4 else 3  // NC → Adaptive（若启用）或 Transparency
-            4 -> 3  // Adaptive → Transparency
-            3 -> 1  // Transparency → OFF
-            else -> 2  // OFF or unknown → NC
-        }
-        setANCMode(next)
-    }
-
-    fun setANCMode(mode: Int) {
-        Log.d(TAG, "setANCMode: $mode")
-        currentAnc = mode  // 乐观更新，与 AppRfcommController 保持一致
-        val packet = when (mode) {
-            1 -> Enums.ANC_OFF
-            2 -> Enums.ANC_NOISE_CANCEL
-            3 -> Enums.ANC_TRANSPARENCY
-            4 -> Enums.ANC_ADAPTIVE
-            else -> return
-        }
-        CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(packet, "set ANC mode")
-        }
-    }
-
-    fun queryBattery(allowReconnect: Boolean = false) {
-        CoroutineScope(Dispatchers.IO).launch {
-            sendPacketSafe(Enums.QUERY_BATTERY, "query battery", allowReconnect)
-        }
-    }
-
-    private suspend fun sendGameModePackets(enabled: Boolean) {
-        for ((index, packet) in Enums.gameModePackets(enabled, gameModeImplementation).withIndex()) {
-            if (index > 0) delay(120)
-            if (!sendPacketSafe(packet, "set game mode")) return
-        }
-    }
-
-    private suspend fun sendStatusQueryPackets(allowReconnect: Boolean = false) {
-        if (!sendPacketSafe(Enums.QUERY_STATUS, "query status", allowReconnect)) return
-        delay(50)
-        if (!sendPacketSafe(Enums.QUERY_BATTERY, "query battery", allowReconnect)) return
-        delay(50)
-        sendPacketSafe(Enums.QUERY_ANC, "query ANC", allowReconnect)
-    }
-
-    /**
-     * Combo query strategy: send batch query (wake + game mode), then battery, then ANC.
-     */
-    fun queryStatus(allowReconnect: Boolean = false) {
-        CoroutineScope(Dispatchers.IO).launch {
-            sendStatusQueryPackets(allowReconnect)
-        }
-    }
-
-    fun disconnectAudio(context: Context, device: BluetoothDevice?) {
-        val bluetoothAdapter = context.getSystemService(BluetoothManager::class.java).adapter
-
-        MediaControl.sendPause()
-
-        bluetoothAdapter?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
-            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-                if (profile == BluetoothProfile.HEADSET) {
-                    try {
-                        val method = proxy.javaClass.getMethod("disconnect", BluetoothDevice::class.java)
-                        method.invoke(proxy, device)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    } finally {
-                        bluetoothAdapter.closeProfileProxy(BluetoothProfile.HEADSET, proxy)
-                    }
-                }
-            }
-            override fun onServiceDisconnected(profile: Int) { }
-        }, BluetoothProfile.HEADSET)
-
-        CoroutineScope(Dispatchers.Default).launch {
-            delay(500)
-            for (route in routes) {
-                if (route.type == MediaRoute2Info.TYPE_BUILTIN_SPEAKER) {
-                    Log.d(TAG, "found speaker route $route")
-                    mediaRouter.transferTo(route)
-                }
-            }
-        }
-
-        setRegularBatteryLevel(lastTempBatt)
-    }
-
-    fun connectAudio(context: Context, device: BluetoothDevice?) {
-        val targetDevice = device ?: return
-        val bluetoothAdapter = context.getSystemService(BluetoothManager::class.java).adapter
-
-        bluetoothAdapter?.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
-            override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
-                if (profile == BluetoothProfile.HEADSET) {
-                    try {
-                        val method = proxy.javaClass.getMethod("connect", BluetoothDevice::class.java)
-                        method.invoke(proxy, targetDevice)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    } finally {
-                        bluetoothAdapter.closeProfileProxy(BluetoothProfile.HEADSET, proxy)
-                    }
-                }
-            }
-            override fun onServiceDisconnected(profile: Int) { }
-        }, BluetoothProfile.HEADSET)
-
-        for (route in routes) {
-            if (route.type == MediaRoute2Info.TYPE_BLUETOOTH_A2DP && route.name == targetDevice.name) {
-                Log.d(TAG, "found bt route $route")
-                mediaRouter.transferTo(route)
-            }
-        }
-
-        val statusBarManager = context.getSystemService("statusbar") as StatusBarManager
-        statusBarManager.setIconVisibility("wireless_headset", true)
-        setRegularBatteryLevel(lastTempBatt)
-    }
-
-    fun setRegularBatteryLevel(level: Int) {
-        try {
-            val service = getObjectField(mContext, "mAdapterService")
-            callMethod(service, "setBatteryLevel", mDevice, level, false)
+            @Suppress("DEPRECATION")
+            char.value = cmd
+            @Suppress("DEPRECATION")
+            gatt.writeCharacteristic(char)
+            Log.d(TAG, "🚀 BLE 通道下发高维指令: ${cmd.joinToString("") { "%02X".format(it) }}")
         } catch (e: Exception) {
-            Log.e(TAG, "setRegularBatteryLevel failed", e)
+            Log.e(TAG, "GATT 指令下发坍塌", e)
         }
     }
 
-    private fun getObjectField(instance: Any?, fieldName: String): Any? {
-        if (instance == null) return null
-        var cls: Class<*>? = instance.javaClass
-        while (cls != null) {
-            runCatching {
-                return cls.getDeclaredField(fieldName).apply { isAccessible = true }.get(instance)
+    private val gattCallback = object : BluetoothGattCallback() {
+        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.d(TAG, "✅ BLE 物理链路已握手！开始扫描 fe01 私有服务...")
+                gatt.discoverServices()
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.e(TAG, "❌ BLE 链路断开")
+                disconnect()
+                context?.let { currentDevice?.let { dev -> broadcastDisconnected(it, dev) } }
             }
-            cls = cls.superclass
         }
-        throw NoSuchFieldException(fieldName)
+
+        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                val service = gatt.getService(UUID_SERVICE)
+                if (service == null) {
+                    Log.e(TAG, "❌ 致命错误：当前耳机未暴露华为 MBB 服务 $UUID_SERVICE")
+                    return
+                }
+                
+                writeChar = service.getCharacteristic(UUID_WRITE)
+                val notifyChar = service.getCharacteristic(UUID_NOTIFY)
+                
+                if (notifyChar != null) {
+                    gatt.setCharacteristicNotification(notifyChar, true)
+                    val descriptor = notifyChar.getDescriptor(UUID_DESCR)
+                    if (descriptor != null) {
+                        @Suppress("DEPRECATION")
+                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        @Suppress("DEPRECATION")
+                        gatt.writeDescriptor(descriptor)
+                        Log.d(TAG, "✅ 已强行挂载 Notify 监听队列: $UUID_NOTIFY")
+                    }
+                }
+                
+                isConnected = true
+                Log.d(TAG, "🎉 大满贯！华为 FreeBuds 彻底通过 BLE GATT 并网！")
+                context?.let { currentDevice?.let { dev -> broadcastConnected(it, dev) } }
+                
+                // 🚀 主动连环发送心跳包，把它的电量和降噪状态逼出来
+                sendCommand(Enums.QUERY_BATTERY)
+                sendCommand(Enums.QUERY_ANC)
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            if (characteristic.uuid == UUID_NOTIFY) {
+                @Suppress("DEPRECATION")
+                val data = characteristic.value ?: return
+                processData(data)
+            }
+        }
     }
 
-    private fun callMethod(instance: Any?, methodName: String, vararg args: Any?): Any? {
-        if (instance == null) return null
-        var cls: Class<*>? = instance.javaClass
-        while (cls != null) {
-            cls.declaredMethods.firstOrNull { it.name == methodName && it.parameterTypes.size == args.size }?.let {
-                it.isAccessible = true
-                return it.invoke(instance, *args)
+    private fun processData(data: ByteArray) {
+        val frames = framer.append(data, data.size)
+        for (frame in frames) {
+            Log.d(TAG, "📥 捕获底层 MBB 帧: ${frame.joinToString("") { "%02X".format(it) }}")
+            
+            val battery = BatteryParser.parse(frame)
+            if (battery != null) {
+                Log.d(TAG, "🔋 脱壳电量: 左${battery.left?.level} 右${battery.right?.level} 舱${battery.case?.level}")
+                broadcastBattery(battery)
             }
-            cls = cls.superclass
+            
+            val anc = AncModeParser.parse(frame)
+            if (anc != null) {
+                Log.d(TAG, "🎧 脱壳降噪模式: $anc")
+                broadcastAnc(anc)
+            }
         }
-        throw NoSuchMethodException(methodName)
+    }
+
+    private fun broadcastConnected(ctx: Context, device: BluetoothDevice) {
+        val intent = Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {
+            putExtra("address", device.address)
+            putExtra("device_name", device.name ?: "Huawei FreeBuds")
+            setPackage("com.android.settings")
+        }
+        ctx.sendBroadcast(intent)
+        intent.setPackage("com.milink.service")
+        ctx.sendBroadcast(intent)
+    }
+
+    private fun broadcastDisconnected(ctx: Context, device: BluetoothDevice) {
+        val intent = Intent(OppoPodsAction.ACTION_PODS_DISCONNECTED).apply {
+            putExtra("address", device.address)
+            setPackage("com.android.settings")
+        }
+        ctx.sendBroadcast(intent)
+        intent.setPackage("com.milink.service")
+        ctx.sendBroadcast(intent)
+    }
+
+    private fun broadcastBattery(battery: BatteryParser.BatteryResult) {
+        val ctx = context ?: return
+        val intent = Intent(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED).apply {
+            putExtra("address", currentDevice?.address)
+            putExtra("left_battery", battery.left?.level ?: 0)
+            putExtra("left_charging", battery.left?.isCharging ?: false)
+            putExtra("left_connected", battery.left != null)
+            putExtra("right_battery", battery.right?.level ?: 0)
+            putExtra("right_charging", battery.right?.isCharging ?: false)
+            putExtra("right_connected", battery.right != null)
+            putExtra("case_battery", battery.case?.level ?: 0)
+            putExtra("case_charging", battery.case?.isCharging ?: false)
+            putExtra("case_connected", battery.case != null)
+        }
+        intent.setPackage("com.android.settings")
+        ctx.sendBroadcast(intent)
+        intent.setPackage("com.milink.service")
+        ctx.sendBroadcast(intent)
+    }
+
+    private fun broadcastAnc(anc: NoiseControlMode) {
+        val ctx = context ?: return
+        val status = when (anc) {
+            NoiseControlMode.OFF -> 1
+            NoiseControlMode.NOISE_CANCELLATION -> 2
+            NoiseControlMode.TRANSPARENCY -> 3
+            else -> 1
+        }
+        val intent = Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
+            putExtra("address", currentDevice?.address)
+            putExtra("status", status)
+        }
+        intent.setPackage("com.android.settings")
+        ctx.sendBroadcast(intent)
+        intent.setPackage("com.milink.service")
+        ctx.sendBroadcast(intent)
     }
 }
