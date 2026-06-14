@@ -20,9 +20,13 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 🎯 核心修正补丁：仅修改依赖表中的全局变量，不破坏任何核心构建文件结构
-      - name: Overwrite Global Kotlin Version
+      # 🎯 核心补丁事实：直接在全局配置文件末尾追加稳定版版本锁，从源头上绝杀 Could not find 依赖报错，且不破坏项目模块关联
+      - name: Patch Global Version Table
         run: |
+          if [ -f "gradle.properties" ]; then
+            echo "" >> gradle.properties
+            echo "kotlin=2.0.20" >> gradle.properties
+          fi
           if [ -f "gradle/libs.versions.toml" ]; then
             sed -i 's/kotlin = "2.3.20"/kotlin = "2.0.20"/g' gradle/libs.versions.toml
           fi
@@ -30,11 +34,9 @@ jobs:
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
-      # 🎯 终极全线通车命令：
-      # 用 -b app/build.gradle.kts 强制纠正路径断层！
-      # 用 -Pkotlin=2.0.20 强制空投稳定版编译环境，两步直接全盘盘活项目！
+      # 🎯 终极正统通车命令：不加任何 -b 偏置，让 Gradle 自动扫描完整的 settings.gradle.kts 并网编译
       - name: Build Debug APK with Gradle
-        run: ./gradlew assembleDebug -b app/build.gradle.kts -Pkotlin=2.0.20 --no-daemon
+        run: ./gradlew :app:assembleDebug --no-daemon
 
       - name: Find and Isolate Output APK
         id: sign
