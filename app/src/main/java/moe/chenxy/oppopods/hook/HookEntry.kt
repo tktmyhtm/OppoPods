@@ -11,12 +11,9 @@ class HookEntry : XposedModule() {
         if (!param.isFirstPackage) return
 
         when (param.packageName) {
-            "com.android.bluetooth" -> {
-    loadHook(HeadsetStateDispatcher, param.defaultClassLoader)
-    loadHook(SystemBusDispatcher, param.defaultClassLoader)
-}
+            "com.android.bluetooth" -> loadHook(HeadsetStateDispatcher, param.defaultClassLoader)
             "com.milink.service" -> loadHook(MiLinkServiceHook, param.defaultClassLoader)
-"com.android.bluetooth" -> loadHook(HeadsetStateDispatcher, param.defaultClassLoader)
+            "com.xiaomi.bluetooth" -> loadHook(MiBluetoothToastHook, param.defaultClassLoader)
             "com.android.settings" -> loadHook(SettingsHeadsetHook, param.defaultClassLoader)
         }
     }
