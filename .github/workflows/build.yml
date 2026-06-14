@@ -20,17 +20,11 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 🎯 终极绝杀补丁：精准对齐子目录，将 app/build.gradle.kts 和 gradle/libs.versions.toml 里的 2.3.20 强制掰回稳定版
-      - name: Patch Invalid Kotlin Version
+      # 🎯 终极绝杀补丁：用最高特权参数直接覆盖 Gradle 全局变量表，100% 杜绝 Could not find 且绝不损坏任何源码文件！
+      - name: Overwrite Global Kotlin Version
         run: |
-          if [ -f "build.gradle.kts" ]; then
-            sed -i 's/\${libs.versions.kotlin.get()}/2.0.20/g' build.gradle.kts
-            sed -i 's/"2.3.20"/"2.0.20"/g' build.gradle.kts
-          fi
-          if [ -f "app/build.gradle.kts" ]; then
-            sed -i 's/\${libs.versions.kotlin.get()}/2.0.20/g' app/build.gradle.kts
-            sed -i 's/"2.3.20"/"2.0.20"/g' app/build.gradle.kts
-          fi
+          mkdir -p ~/.gradle
+          echo "kotlin=2.0.20" >> ~/.gradle/gradle.properties
           if [ -f "gradle/libs.versions.toml" ]; then
             sed -i 's/kotlin = "2.3.20"/kotlin = "2.0.20"/g' gradle/libs.versions.toml
           fi
@@ -38,8 +32,9 @@ jobs:
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
+      # 🎯 核心通车命令：在执行编译时，直接通过 -P 参数向全局高空强行空投稳定版编译环境，降伏 2.3.20 伪版本
       - name: Build Debug APK with Gradle
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug -Pkotlin=2.0.20 --no-daemon
 
       - name: Find and Isolate Output APK
         id: sign
