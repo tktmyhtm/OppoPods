@@ -21,7 +21,7 @@ object RfcommController {
     private val UUID_NOTIFY = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
     private val UUID_WRITE = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
     private val UUID_DESCR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-    private val UUID_SPP = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
+    private val UUID_SPP = UUID.fromString("00001101-0000-1000-8000-00805f9b34fb")
     private var currentGatt: BluetoothGatt? = null
     private var writeChar: BluetoothGattCharacteristic? = null
     private var isConnected = false
@@ -32,7 +32,7 @@ object RfcommController {
     private var sppRunning = false
     private val framer = HuaweiPacketFramer()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var lastBatteryResult: BatteryParser.BatteryResult? = null
+    private var lastBatteryResult: BatteryResult? = null
     private var lastAncMode: NoiseControlMode? = null
     private var lastBatteryBroadcastMs = 0L
     private var lastAncBroadcastMs = 0L
@@ -75,11 +75,15 @@ object RfcommController {
             override fun onReceive(c: Context?, intent: Intent?) {
                 when (intent?.action) {
                     OppoPodsAction.ACTION_ANC_SELECT -> {
-                    val mode = when (intent.getIntExtra("status", 1)) {
-                         1 -> NoiseControlMode.OFF; 2 -> NoiseControlMode.NOISE_CANCELLATION
-                         3 -> NoiseControlMode.TRANSPARENCY; else -> NoiseControlMode.OFF
-}
-sendCommand(MbbCmd.ancCommand(mode))
+                        val s = intent.getIntExtra("status", 1)
+                        val mode = when (s) {
+                            1 -> NoiseControlMode.OFF
+                            2 -> NoiseControlMode.NOISE_CANCELLATION
+                            3 -> NoiseControlMode.TRANSPARENCY
+                            4 -> NoiseControlMode.ADAPTIVE
+                            else -> NoiseControlMode.OFF
+                        }
+                        sendCommand(MbbCmd.ancCommand(mode))
                     }
                     OppoPodsAction.ACTION_REFRESH_STATUS -> {
                         sendCommand(MbbCmd.QUERY_BATTERY)
@@ -175,21 +179,21 @@ sendCommand(MbbCmd.ancCommand(mode))
     }
 
     private fun processSppData(data: ByteArray) {
-        for (frame in framer.append(data, data.size)) processFrame(frame, true)
+        for (frame in framer.append(data, data.size)) processFrame(frame)
     }
     private fun processBleData(data: ByteArray) {
-        for (frame in framer.append(data, data.size)) processFrame(frame, false)
+        for (frame in framer.append(data, data.size)) processFrame(frame)
     }
-    private fun processFrame(frame: ByteArray, isSpp: Boolean) {
+    private fun processFrame(frame: ByteArray) {
         val now = System.currentTimeMillis()
-        val battery = if (isSpp) BatteryParser.parseSpp(frame) else BatteryParser.parseBle(frame)
+        val battery = BatteryParser.parse(frame)
         if (battery != null && battery != lastBatteryResult) {
             lastBatteryResult = battery
             if (now - lastBatteryBroadcastMs >= BATTERY_BROADCAST_INTERVAL_MS) {
                 lastBatteryBroadcastMs = now; broadcastBattery(battery)
             }
         }
-        val anc = if (isSpp) AncModeParser.parseSpp(frame) else AncModeParser.parseBle(frame)
+        val anc = AncModeParser.parse(frame)
         if (anc != null && anc != lastAncMode) {
             lastAncMode = anc
             if (now - lastAncBroadcastMs >= ANC_BROADCAST_INTERVAL_MS) {
@@ -198,7 +202,7 @@ sendCommand(MbbCmd.ancCommand(mode))
         }
     }
 
-    private fun broadcastBattery(battery: BatteryParser.BatteryResult) {
+    private fun broadcastBattery(battery: BatteryResult) {
         val ctx = context ?: return
         ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED).apply {
             putExtra("address", currentDevice?.address)

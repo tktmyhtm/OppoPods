@@ -87,7 +87,7 @@ class AppRfcommController {
         }
     }
     private fun handlePacket(packet: ByteArray) {
-        val battery = BatteryParser.parseSpp(packet)
+        val battery = BatteryParser.parse(packet)
         if (battery != null) {
             val left = PodParams(battery.left?.level ?: 0, battery.left?.isCharging == true, battery.left != null, 0)
             val right = PodParams(battery.right?.level ?: 0, battery.right?.isCharging == true, battery.right != null, 0)
@@ -95,7 +95,7 @@ class AppRfcommController {
             _batteryParams.value = BatteryParams(left, right, case)
             return
         }
-        val anc = AncModeParser.parseSpp(packet)
+        val anc = AncModeParser.parse(packet)
         if (anc != null) {
             Log.d(TAG, "ANC mode received: $anc")
             _ancMode.value = anc
@@ -114,14 +114,8 @@ class AppRfcommController {
     }
 
     fun setANCMode(mode: NoiseControlMode) {
-        val mbbMode = when (mode) {
-            NoiseControlMode.OFF -> 1
-            NoiseControlMode.NOISE_CANCELLATION -> 2
-            NoiseControlMode.TRANSPARENCY -> 3
-            NoiseControlMode.ADAPTIVE -> 4
-        }
         _ancMode.value = mode
-        scope.launch { sendPacket(MbbCmd.ancCommand(mbbMode)) }
+        scope.launch { sendPacket(MbbCmd.ancCommand(mode)) }
     }
     private fun queryStatus() {
         scope.launch {
