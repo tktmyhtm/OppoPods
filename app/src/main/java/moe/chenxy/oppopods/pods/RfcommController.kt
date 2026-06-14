@@ -33,14 +33,17 @@ object RfcommController {
     private val framer = OppoPacketFramer()
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // 🛡️ 状态缓存池：用来拦截冗余广播
+    private var lastBatteryResult: BatteryParser.BatteryResult? = null
+    private var lastAncMode: NoiseControlMode? = null
+    private var lastBroadcastTime = 0L
+
     fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
         context = ctx.applicationContext
         currentDevice = device
         
-        // 🚨 强行用 Error 级别打日志，撕开系统的过滤网！
-        Log.e(TAG, "🚨🚨🚨 雷达触发！开始启动 BLE GATT: ${device.address}")
-        // 🚨 直接在屏幕下方弹窗，让你肉眼看见模块是否活着！
-        mainHandler.post { Toast.makeText(context, "LSPosed: 捕获 FreeBuds，开始并网!", Toast.LENGTH_LONG).show() }
+        Log.e(TAG, "🚨🚨🚨 雷达触发！启动 BLE GATT 引擎，准备接管: ${device.address}")
+        mainHandler.post { Toast.makeText(context, "LSPosed: 捕获 FreeBuds，防止拥堵启动!", Toast.LENGTH_LONG).show() }
         
         disconnect()
         registerReceiver()
@@ -49,7 +52,7 @@ object RfcommController {
 
     fun disconnectedPod(ctx: Context, device: BluetoothDevice) {
         if (currentDevice?.address == device.address) {
-            Log.e(TAG, "🚨🚨🚨 雷达触发！检测到耳机断开！")
+            Log.e(TAG, "🚨🚨🚨 检测到耳机断开！")
             disconnect()
             broadcastDisconnected(ctx, device)
         }
@@ -63,6 +66,8 @@ object RfcommController {
         currentGatt = null
         writeChar = null
         isConnected = false
+        lastBatteryResult = null
+        lastAncMode = null
     }
 
     private fun registerReceiver() {
@@ -105,18 +110,16 @@ object RfcommController {
             gatt.writeCharacteristic(char)
             Log.e(TAG, "🚀 BLE 指令下发: ${cmd.joinToString("") { "%02X".format(it) }}")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ GATT 指令下发坍塌", e)
+            Log.e(TAG, "❌ 指令下发坍塌", e)
         }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.e(TAG, "✅ BLE 物理链路已握手！扫描 fe01 服务...")
-                mainHandler.post { Toast.makeText(context, "LSPosed: BLE已连上，正在获取电量...", Toast.LENGTH_SHORT).show() }
+                Log.e(TAG, "✅ 物理链路握手成功！扫描 fe01 服务...")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                Log.e(TAG, "❌ BLE 链路断开")
                 disconnect()
                 context?.let { currentDevice?.let { dev -> broadcastDisconnected(it, dev) } }
             }
@@ -124,12 +127,7 @@ object RfcommController {
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                val service = gatt.getService(UUID_SERVICE)
-                if (service == null) {
-                    Log.e(TAG, "❌ 致命错误：当前耳机未暴露私有服务 $UUID_SERVICE")
-                    return
-                }
-                
+                val service = gatt.getService(UUID_SERVICE) ?: return
                 writeChar = service.getCharacteristic(UUID_WRITE)
                 val notifyChar = service.getCharacteristic(UUID_NOTIFY)
                 
@@ -141,18 +139,15 @@ object RfcommController {
                         descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                         @Suppress("DEPRECATION")
                         gatt.writeDescriptor(descriptor)
-                        Log.e(TAG, "✅ 已挂载 Notify 监听队列")
                     }
                 }
                 
                 isConnected = true
-                Log.e(TAG, "🎉 大满贯！华为 FreeBuds 彻底通过 BLE GATT 并网！")
+                Log.e(TAG, "🎉 华为 FreeBuds 彻底并网！")
                 context?.let { currentDevice?.let { dev -> broadcastConnected(it, dev) } }
                 
                 sendCommand(Enums.QUERY_BATTERY)
                 sendCommand(Enums.QUERY_ANC)
-            } else {
-                Log.e(TAG, "❌ 扫描服务失败，状态码: $status")
             }
         }
 
@@ -168,19 +163,38 @@ object RfcommController {
 
     private fun processData(data: ByteArray) {
         val frames = framer.append(data, data.size)
+        val now = System.currentTimeMillis()
+
         for (frame in frames) {
-            Log.e(TAG, "📥 捕获底层 MBB 帧: ${frame.joinToString("") { "%02X".format(it) }}")
-            
             val battery = BatteryParser.parse(frame)
-            if (battery != null) {
-                Log.e(TAG, "🔋 脱壳电量: 左${battery.left?.level} 右${battery.right?.level} 舱${battery.case?.level}")
-                broadcastBattery(battery)
-            }
-            
             val anc = AncModeParser.parse(frame)
-            if (anc != null) {
-                Log.e(TAG, "🎧 脱壳降噪: $anc")
-                broadcastAnc(anc)
+            
+            var stateChanged = false
+
+            // 🛡️ 拦截器：只有数据真正变化时才放行
+            if (battery != null && battery != lastBatteryResult) {
+                lastBatteryResult = battery
+                stateChanged = true
+            }
+            if (anc != null && anc != lastAncMode) {
+                lastAncMode = anc
+                stateChanged = true
+            }
+
+            // 🛡️ 节流阀：即使状态发生变化，每 1.5 秒也最多只允许发送 1 次广播！
+            if (stateChanged || (now - lastBroadcastTime > 3000)) {
+                lastBroadcastTime = now
+                Log.e(TAG, "📤 节流放行：向系统发送电量/降噪更新广播！")
+                
+                if (lastBatteryResult != null) broadcastBattery(lastBatteryResult!!)
+                if (lastAncMode != null) broadcastAnc(lastAncMode!!)
+                
+                // 为了确保你看到胜利的瞬间，我们强制在屏幕弹个电量
+                mainHandler.post { 
+                    lastBatteryResult?.let { b -> 
+                        Toast.makeText(context, "LSPosed 电量获取成功!\n左:${b.left?.level} 右:${b.right?.level}", Toast.LENGTH_SHORT).show() 
+                    }
+                }
             }
         }
     }
