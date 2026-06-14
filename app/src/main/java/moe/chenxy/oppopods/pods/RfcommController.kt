@@ -10,108 +10,86 @@ import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.widget.Toast
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
+import java.io.InputStream
 import java.util.UUID
 
 @SuppressLint("MissingPermission")
 object RfcommController {
-    private const val TAG = "OppoPods-GATT"
-
+    private const val TAG = "OppoPods-Bus"
     private val UUID_SERVICE = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
     private val UUID_NOTIFY = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
     private val UUID_WRITE = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
     private val UUID_DESCR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
+    private val UUID_SPP = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
     private var currentGatt: BluetoothGatt? = null
     private var writeChar: BluetoothGattCharacteristic? = null
     private var isConnected = false
     private var context: Context? = null
     private var currentDevice: BluetoothDevice? = null
     private var commandReceiver: BroadcastReceiver? = null
-
-    private val framer = OppoPacketFramer()
+    private var sppThread: Thread? = null
+    private var sppRunning = false
+    private val framer = HuaweiPacketFramer()
     private val mainHandler = Handler(Looper.getMainLooper())
-
     private var lastBatteryResult: BatteryParser.BatteryResult? = null
     private var lastAncMode: NoiseControlMode? = null
-    private var lastBroadcastTime = 0L
-    private var lastConnectTime = 0L
-    private val GLOBAL_THROTTLE_MS = 2000L
+    private var lastBatteryBroadcastMs = 0L
+    private var lastAncBroadcastMs = 0L
+    private var lastConnectMs = 0L
+    private val BATTERY_BROADCAST_INTERVAL_MS = 5000L
+    private val ANC_BROADCAST_INTERVAL_MS = 3000L
+    private val CONNECT_THROTTLE_MS = 5000L
 
     fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
         val now = System.currentTimeMillis()
-        if (now - lastConnectTime < GLOBAL_THROTTLE_MS) return
-        lastConnectTime = now
-
+        if (now - lastConnectMs < CONNECT_THROTTLE_MS) return
+        lastConnectMs = now
         context = ctx.applicationContext
         currentDevice = device
-
-        Log.e(TAG, "🚨 捕获 FreeBuds，启动 GATT: ${device.address}")
-
-        mainHandler.post {
-            context?.let { safeCtx ->
-                Toast.makeText(safeCtx, "LSPosed: 捕获 FreeBuds", Toast.LENGTH_LONG).show()
-            }
-        }
-
+        Log.e(TAG, "[conn] FreeBuds: " + device.address)
         disconnect()
         registerReceiver()
         currentGatt = device.connectGatt(context, false, gattCallback)
+        startSppConnection(device)
     }
 
     fun disconnectedPod(ctx: Context, device: BluetoothDevice) {
         if (currentDevice?.address == device.address) {
-            Log.e(TAG, "🚨 耳机断开")
+            Log.e(TAG, "[disc] disconnected")
             disconnect()
-            broadcastDisconnected(ctx, device)
         }
     }
 
     private fun disconnect() {
-        try {
-            currentGatt?.disconnect()
-            currentGatt?.close()
-        } catch (e: Exception) {}
-        currentGatt = null
-        writeChar = null
-        isConnected = false
-        lastBatteryResult = null
-        lastAncMode = null
+        try { currentGatt?.disconnect() } catch (_: Exception) {}
+        try { currentGatt?.close() } catch (_: Exception) {}
+        currentGatt = null; writeChar = null; isConnected = false
+        sppRunning = false; sppThread = null
+        lastBatteryResult = null; lastAncMode = null
     }
 
     private fun registerReceiver() {
-        if (commandReceiver == null) {
-            commandReceiver = object : BroadcastReceiver() {
-                override fun onReceive(c: Context?, intent: Intent?) {
-                    when (intent?.action) {
-                        OppoPodsAction.ACTION_ANC_SELECT -> {
-                            val status = intent.getIntExtra("status", 1)
-                            val payload = when (status) {
-                                1 -> Enums.ANC_OFF
-                                2 -> Enums.ANC_NOISE_CANCEL
-                                3 -> Enums.ANC_TRANSPARENCY
-                                else -> Enums.ANC_OFF
-                            }
-                            sendCommand(payload)
-                        }
-                        OppoPodsAction.ACTION_REFRESH_STATUS -> {
-                            sendCommand(Enums.QUERY_BATTERY)
-                            sendCommand(Enums.QUERY_ANC)
-                        }
+        if (commandReceiver != null) return
+        commandReceiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    OppoPodsAction.ACTION_ANC_SELECT -> {
+                        sendCommand(MbbCmd.ancCommand(intent.getIntExtra("status", 1)))
+                    }
+                    OppoPodsAction.ACTION_REFRESH_STATUS -> {
+                        sendCommand(MbbCmd.QUERY_BATTERY)
+                        sendCommand(MbbCmd.QUERY_ANC)
                     }
                 }
             }
-            val filter = IntentFilter().apply {
-                addAction(OppoPodsAction.ACTION_ANC_SELECT)
-                addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
-            }
-            try {
-                context?.registerReceiver(commandReceiver, filter, 2)
-            } catch (e: Exception) {
-                context?.registerReceiver(commandReceiver, filter)
-            }
         }
+        val filter = IntentFilter().apply {
+            addAction(OppoPodsAction.ACTION_ANC_SELECT)
+            addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
+        }
+        try { context?.registerReceiver(commandReceiver, filter, 2)
+        } catch (_: Exception) { context?.registerReceiver(commandReceiver, filter) }
     }
 
     private fun sendCommand(cmd: ByteArray) {
@@ -122,119 +100,103 @@ object RfcommController {
             char.value = cmd
             @Suppress("DEPRECATION")
             gatt.writeCharacteristic(char)
-            Log.e(TAG, "🚀 BLE 指令: ${cmd.joinToString("") { "%02X".format(it) }}")
+            Log.e(TAG, "[BLE] " + cmd.joinToString("") { String.format("%02X", it) })
         } catch (e: Exception) {
-            Log.e(TAG, "❌ 指令下发失败", e)
+            Log.e(TAG, "[BLE] write failed", e)
         }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.e(TAG, "✅ GATT 连接成功，发现服务...")
+                Log.e(TAG, "[GATT] connected")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 disconnect()
             }
         }
-
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                val service = gatt.getService(UUID_SERVICE) ?: return
-                writeChar = service.getCharacteristic(UUID_WRITE)
-                val notifyChar = service.getCharacteristic(UUID_NOTIFY)
-
-                if (notifyChar != null) {
-                    gatt.setCharacteristicNotification(notifyChar, true)
-                    val descriptor = notifyChar.getDescriptor(UUID_DESCR)
-                    if (descriptor != null) {
-                        @Suppress("DEPRECATION")
-                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        @Suppress("DEPRECATION")
-                        gatt.writeDescriptor(descriptor)
-                    }
+            if (status != BluetoothGatt.GATT_SUCCESS) return
+            val service = gatt.getService(UUID_SERVICE) ?: return
+            writeChar = service.getCharacteristic(UUID_WRITE)
+            val notifyChar = service.getCharacteristic(UUID_NOTIFY)
+            if (notifyChar != null) {
+                gatt.setCharacteristicNotification(notifyChar, true)
+                val descriptor = notifyChar.getDescriptor(UUID_DESCR)
+                if (descriptor != null) {
+                    @Suppress("DEPRECATION")
+                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                    @Suppress("DEPRECATION")
+                    gatt.writeDescriptor(descriptor)
                 }
-
-                isConnected = true
-                Log.e(TAG, "🎉 FreeBuds 并网成功！")
-
-                sendCommand(Enums.QUERY_BATTERY)
-                sendCommand(Enums.QUERY_ANC)
             }
+            isConnected = true
+            Log.e(TAG, "[GATT] ready! querying...")
+            mainHandler.postDelayed({
+                sendCommand(MbbCmd.QUERY_BATTERY)
+                sendCommand(MbbCmd.QUERY_ANC)
+            }, 1000)
         }
-
         @Deprecated("Deprecated in Java")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid == UUID_NOTIFY) {
                 @Suppress("DEPRECATION")
                 val data = characteristic.value ?: return
-                processData(data)
+                processBleData(data)
             }
         }
     }
 
-    private fun processData(data: ByteArray) {
-        val frames = framer.append(data, data.size)
-        val now = System.currentTimeMillis()
-        // 全局节流阀：至少间隔 3 秒才能发一次广播
-        if (now - lastBroadcastTime < 3000) return
-        lastBroadcastTime = now
-
-        for (frame in frames) {
-            val battery = BatteryParser.parse(frame)
-            val anc = AncModeParser.parse(frame)
-
-            var stateChanged = false
-
-            if (battery != null && battery != lastBatteryResult) {
-                lastBatteryResult = battery
-                stateChanged = true
-            }
-            if (anc != null && anc != lastAncMode) {
-                lastAncMode = anc
-                stateChanged = true
-            }
-
-            if (stateChanged) {
-                Log.e(TAG, "📤 放行广播")
-
-                val currentBattery = lastBatteryResult
-                if (currentBattery != null) broadcastBattery(currentBattery)
-
-                val currentAnc = lastAncMode
-                if (currentAnc != null) broadcastAnc(currentAnc)
-
-                mainHandler.post {
-                    context?.let { ctx ->
-                        currentBattery?.let { b ->
-                            Toast.makeText(ctx, "电量: 左:${b.left?.level} 右:${b.right?.level}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+    private fun startSppConnection(device: BluetoothDevice) {
+        sppRunning = true
+        sppThread = Thread {
+            try {
+                val socket = device.createRfcommSocketToServiceRecord(UUID_SPP)
+                socket.connect()
+                Log.e(TAG, "[SPP] connected!")
+                val inputStream: InputStream = socket.inputStream
+                val buffer = ByteArray(4096)
+                while (sppRunning) {
+                    val bytesRead = try { inputStream.read(buffer)
+                    } catch (e: Exception) { Log.e(TAG, "[SPP] " + e.message); break }
+                    if (bytesRead <= 0) break
+                    processSppData(buffer.copyOfRange(0, bytesRead))
                 }
+                try { socket.close() } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e(TAG, "[SPP] failed: " + e.message)
+            }
+            sppRunning = false
+        }.apply { name = "oppopods-spp"; isDaemon = true; start() }
+    }
+
+    private fun processSppData(data: ByteArray) {
+        for (frame in framer.append(data, data.size)) processFrame(frame, true)
+    }
+    private fun processBleData(data: ByteArray) {
+        for (frame in framer.append(data, data.size)) processFrame(frame, false)
+    }
+    private fun processFrame(frame: ByteArray, isSpp: Boolean) {
+        val now = System.currentTimeMillis()
+        val battery = if (isSpp) BatteryParser.parseSpp(frame) else BatteryParser.parseBle(frame)
+        if (battery != null && battery != lastBatteryResult) {
+            lastBatteryResult = battery
+            if (now - lastBatteryBroadcastMs >= BATTERY_BROADCAST_INTERVAL_MS) {
+                lastBatteryBroadcastMs = now; broadcastBattery(battery)
             }
         }
-    }
-
-    private fun broadcastConnected(ctx: Context, device: BluetoothDevice) {
-        val intent = Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {
-            putExtra("address", device.address)
-            putExtra("device_name", device.name ?: "Huawei FreeBuds")
+        val anc = if (isSpp) AncModeParser.parseSpp(frame) else AncModeParser.parseBle(frame)
+        if (anc != null && anc != lastAncMode) {
+            lastAncMode = anc
+            if (now - lastAncBroadcastMs >= ANC_BROADCAST_INTERVAL_MS) {
+                lastAncBroadcastMs = now; broadcastAnc(anc)
+            }
         }
-        ctx.sendBroadcast(intent)
-        Log.e(TAG, "📤 broadcastConnected")
-    }
-
-    private fun broadcastDisconnected(ctx: Context, device: BluetoothDevice) {
-        val intent = Intent(OppoPodsAction.ACTION_PODS_DISCONNECTED).apply {
-            putExtra("address", device.address)
-        }
-        ctx.sendBroadcast(intent)
-        Log.e(TAG, "📤 broadcastDisconnected")
     }
 
     private fun broadcastBattery(battery: BatteryParser.BatteryResult) {
         val ctx = context ?: return
-        val intent = Intent(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED).apply {
+        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_BATTERY_CHANGED).apply {
             putExtra("address", currentDevice?.address)
             putExtra("left_battery", battery.left?.level ?: 0)
             putExtra("left_charging", battery.left?.isCharging ?: false)
@@ -245,24 +207,15 @@ object RfcommController {
             putExtra("case_battery", battery.case?.level ?: 0)
             putExtra("case_charging", battery.case?.isCharging ?: false)
             putExtra("case_connected", battery.case != null)
-        }
-        ctx.sendBroadcast(intent)
-        Log.e(TAG, "📤 broadcastBattery")
+        })
+        Log.e(TAG, "[bcast] bat")
     }
-
     private fun broadcastAnc(anc: NoiseControlMode) {
         val ctx = context ?: return
-        val status = when (anc) {
-            NoiseControlMode.OFF -> 1
-            NoiseControlMode.NOISE_CANCELLATION -> 2
-            NoiseControlMode.TRANSPARENCY -> 3
-            else -> 1
-        }
-        val intent = Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
+        ctx.sendBroadcast(Intent(OppoPodsAction.ACTION_PODS_ANC_CHANGED).apply {
             putExtra("address", currentDevice?.address)
-            putExtra("status", status)
-        }
-        ctx.sendBroadcast(intent)
-        Log.e(TAG, "📤 broadcastAnc")
+            putExtra("status", when(anc) { NoiseControlMode.OFF -> 1; NoiseControlMode.NOISE_CANCELLATION -> 2; NoiseControlMode.TRANSPARENCY -> 3 })
+        })
+        Log.e(TAG, "[bcast] anc")
     }
 }
