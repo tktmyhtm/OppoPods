@@ -20,12 +20,16 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 🎯 核心补丁：强制把原文件里那个全网都找不到的 2.3.20 伪版本强行掰回稳定版 2.0.20，绝杀 Could not find 依赖报错
+      # 🎯 终极绝杀补丁：精准对齐子目录，将 app/build.gradle.kts 和 gradle/libs.versions.toml 里的 2.3.20 强制掰回稳定版
       - name: Patch Invalid Kotlin Version
         run: |
           if [ -f "build.gradle.kts" ]; then
             sed -i 's/\${libs.versions.kotlin.get()}/2.0.20/g' build.gradle.kts
             sed -i 's/"2.3.20"/"2.0.20"/g' build.gradle.kts
+          fi
+          if [ -f "app/build.gradle.kts" ]; then
+            sed -i 's/\${libs.versions.kotlin.get()}/2.0.20/g' app/build.gradle.kts
+            sed -i 's/"2.3.20"/"2.0.20"/g' app/build.gradle.kts
           fi
           if [ -f "gradle/libs.versions.toml" ]; then
             sed -i 's/kotlin = "2.3.20"/kotlin = "2.0.20"/g' gradle/libs.versions.toml
