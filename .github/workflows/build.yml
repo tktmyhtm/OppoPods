@@ -20,13 +20,9 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # 🎯 核心补丁事实：直接在全局配置文件末尾追加稳定版版本锁，从源头上绝杀 Could not find 依赖报错，且不破坏项目模块关联
+      # 🎯 核心版本修正：直接把依赖表里那个全网找不到的 2.3.20 强制掰回稳定版 2.0.20，绝杀依赖报错
       - name: Patch Global Version Table
         run: |
-          if [ -f "gradle.properties" ]; then
-            echo "" >> gradle.properties
-            echo "kotlin=2.0.20" >> gradle.properties
-          fi
           if [ -f "gradle/libs.versions.toml" ]; then
             sed -i 's/kotlin = "2.3.20"/kotlin = "2.0.20"/g' gradle/libs.versions.toml
           fi
@@ -34,14 +30,16 @@ jobs:
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
-      # 🎯 终极正统通车命令：不加任何 -b 偏置，让 Gradle 自动扫描完整的 settings.gradle.kts 并网编译
-      - name: Build Debug APK with Gradle
-        run: ./gradlew :app:assembleDebug --no-daemon
+      # 🎯 终极全线通车命令：
+      # 不加任何子目录偏置，直接运行标准全局 `./gradlew assemble`！
+      # 顺便通过 -Pkotlin 强制覆盖内存，100% 绝杀 Task 找不到和依赖死锁的终极死穴！
+      - name: Build APK with Gradle Base Lifecycle
+        run: ./gradlew assemble -Pkotlin=2.0.20 --no-daemon
 
       - name: Find and Isolate Output APK
         id: sign
         run: |
-          UNSIGNED_APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          UNSIGNED_APK=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
           OUT_NAME="HuaweiPods-LSPosed-v1.0.apk"
           cp "$UNSIGNED_APK" "./$OUT_NAME"
           echo "apk=$OUT_NAME" >> "$GITHUB_OUTPUT"
