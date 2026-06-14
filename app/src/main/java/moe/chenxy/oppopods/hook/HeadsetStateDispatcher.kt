@@ -11,7 +11,6 @@ import moe.chenxy.oppopods.pods.RfcommController
 import moe.chenxy.oppopods.utils.SystemApisUtils.setIconVisibility
 
 object HeadsetStateDispatcher : HookContext() {
-
     override fun onHook() {
         hookAfter(findMethodByParamCount("com.android.bluetooth.a2dp.A2dpService", "handleConnectionStateChanged", 3)) {
             val currState = args[2] as Int
@@ -25,7 +24,6 @@ object HeadsetStateDispatcher : HookContext() {
                 Log.d("OppoPods", "A2DP Connection State: $currState, isOppoPod ${isOppoPod(device)}")
                 val context = instance as ContextWrapper
                 if (!isOppoPod(device)) return@post
-
                 val statusBarManager = context.getSystemService("statusbar") as StatusBarManager
                 if (currState == BluetoothHeadset.STATE_CONNECTED) {
                     statusBarManager.setIconVisibility("wireless_headset", true)
@@ -38,12 +36,10 @@ object HeadsetStateDispatcher : HookContext() {
         }
     }
 
-    /**
-     * Detect OPPO earphones by checking if the device name contains "oppo" (case insensitive).
-     */
     @SuppressLint("MissingPermission")
     fun isOppoPod(device: BluetoothDevice): Boolean {
         val name = device.name ?: return false
-        return name.contains("oppo", ignoreCase = true)
+        // 🎯 拦截红米系统 A2DP 音频链路绑定的华为无线耳机硬件 facts
+        return name.contains("FreeBuds", ignoreCase = true)
     }
 }

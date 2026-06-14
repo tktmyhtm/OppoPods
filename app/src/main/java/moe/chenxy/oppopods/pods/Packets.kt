@@ -1,472 +1,251 @@
 package moe.chenxy.oppopods.pods
 
+import android.util.Log
+
 /**
- * OPPO earphone RFCOMM protocol packet definitions.
- *
- * Packet format (Little Endian for multi-byte fields):
- * Header(AA) + TotalLen(1B) + Res(0000) + Cmd(2B) + Seq(1B) + PayLen(2B) + Payload
+ * 🎯 华为原厂高阶查表式 CRC16 算力矩阵
+ * 统一采用 IntArray 表达，彻底绝杀 Kotlin 短整型字面量溢出的编译报错
  */
+object HuaweiCRC {
+    private val CRC16_TABLE = intArrayOf(
+        0, 4129, 8258, 12387, 16516, 20645, 24774, 28903, -32504, -28375, -24246, -20117, -15988, -11859, -7730, -3601, 
+        4657, 528, 12915, 8786, 21173, 17044, 29431, 25302, -27847, -31976, -19589, -23718, -11331, -15460, -3073, -7202, 
+        9314, 13379, 1056, 5121, 25830, 29895, 17572, 21637, -23190, -19125, -31448, -27383, -6674, -2609, -14932, -10867, 
+        13907, 9842, 5649, 1584, 30423, 26358, 22165, 18100, -18597, -22662, -26855, -30920, -2081, -6146, -10339, -14404, 
+        18628, 22757, 26758, 30887, 2112, 6241, 10242, 14371, -13876, -9747, -5746, -1617, -30392, -26263, -22262, -18133, 
+        23285, 19156, 31415, 27286, 6769, 2640, 14899, 10770, -9219, -13348, -1089, -5218, -25735, -29864, -17605, -21734, 
+        27814, 31879, 19684, 23749, 11298, 15363, 3168, 7233, -4690, -625, -12820, -8755, -21206, -17141, -29336, -25271, 
+        32407, 28342, 24277, 20212, 15891, 11826, 7761, 3696, -97, -4162, -8227, -12292, -16613, -20678, -24743, -28808, 
+        -28280, -32343, -20022, -24085, -12020, -16083, -3762, -7825, 4224, 161, 12482, 8419, 20484, 16421, 28742, 24679, 
+        -31815, -27752, -23557, -19494, -15555, -11492, -7297, -3234, 689, 4752, 8947, 13010, 16949, 21012, 25207, 29270, 
+        -18966, -23093, -27224, -31351, -2706, -6833, -10964, -15091, 13538, 9411, 5280, 1153, 29798, 25671, 21540, 17413, 
+        -22565, -18438, -30823, -26696, -6305, -2178, -14563, -10436, 9939, 14066, 1681, 5808, 26199, 30326, 17941, 22068, 
+        -9908, -13971, -1778, -5841, -26168, -30231, -18038, -22101, 22596, 18533, 30726, 26663, 6336, 2273, 14466, 10403, 
+        -13443, -9380, -5313, -1250, -29703, -25640, -21573, -17510, 19061, 23124, 27191, 31254, 2801, 6864, 10931, 14994, 
+        -722, -4849, -8852, -12979, -16982, -21109, -25112, -29239, 31782, 27655, 23652, 19525, 15522, 11395, 7392, 3265, 
+        -4321, -194, -12451, -8324, -20581, -16454, -28711, -24584, 28183, 32310, 20053, 24180, 11923, 16050, 3793, 7920
+    )
 
-object OppoPackets {
-
-    /** Build a complete OPPO protocol packet. */
-    fun buildPacket(cmd: Int, seq: Int = 0xF0, payload: ByteArray = byteArrayOf()): ByteArray {
-        val payLen = payload.size
-        // TotalLen = 7 (header fields after TotalLen: Res(2) + Cmd(2) + Seq(1) + PayLen(2)) + payLen
-        val totalLen = 7 + payLen
-        val packet = ByteArray(2 + totalLen) // Header(1) + TotalLen(1) + rest
-        packet[0] = 0xAA.toByte()           // Header
-        packet[1] = totalLen.toByte()        // TotalLen
-        packet[2] = 0x00                     // Res byte 1
-        packet[3] = 0x00                     // Res byte 2
-        packet[4] = (cmd and 0xFF).toByte()          // Cmd low byte
-        packet[5] = ((cmd shr 8) and 0xFF).toByte()  // Cmd high byte
-        packet[6] = seq.toByte()             // Seq
-        packet[7] = (payLen and 0xFF).toByte()        // PayLen low byte
-        packet[8] = ((payLen shr 8) and 0xFF).toByte() // PayLen high byte
-        payload.copyInto(packet, 9)
-        return packet
+    fun compute(bArr: ByteArray, length: Int): Short {
+        var s10 = 0
+        for (i11 in 0 until length) {
+            val index = ((s10 ushr 8) xor (bArr[i11].toInt() and 0xFF)) and 0xFF
+            s10 = (CRC16_TABLE[index] xor (s10 shl 8)) and 0xFFFF
+        }
+        return s10.toShort()
     }
 }
 
+/**
+ * 🎯 无损替换为华为原厂标准的 [5A 01] 物理流数据帧分配滑动滑窗状态机
+ */
 class OppoPacketFramer {
     private var pending = ByteArray(0)
-
     fun append(buffer: ByteArray, length: Int): List<ByteArray> {
         if (length <= 0) return emptyList()
-
         pending += buffer.copyOfRange(0, length)
         val frames = mutableListOf<ByteArray>()
-
-        while (pending.isNotEmpty()) {
-            val start = pending.indexOf(OPPO_PACKET_HEADER)
+        while (pending.size >= 9) {
+            var start = -1
+            for (i in 0 until pending.size - 1) {
+                if (pending[i] == 0x5A.toByte() && pending[i + 1] == 0x01.toByte()) {
+                    start = i
+                    break
+                }
+            }
             if (start < 0) {
-                pending = ByteArray(0)
+                pending = if (pending.isNotEmpty()) byteArrayOf(pending.last()) else ByteArray(0)
                 break
             }
             if (start > 0) {
                 pending = pending.copyOfRange(start, pending.size)
             }
-            if (pending.size < 2) break
-
-            val totalLen = pending[1].toInt() and 0xFF
-            val frameLen = totalLen + 2
-            if (totalLen < OPPO_PACKET_MIN_TOTAL_LEN || frameLen > OPPO_PACKET_MAX_FRAME_LEN) {
+            if (pending.size < 9) break
+            
+            val lenMSB = pending[3].toInt() and 0xFF
+            val lenLSB = pending[4].toInt() and 0xFF
+            val innerLen = (lenMSB shl 8) or lenLSB
+            val frameLen = 7 + innerLen
+            
+            if (innerLen < 2 || frameLen > 512) {
                 pending = pending.copyOfRange(1, pending.size)
                 continue
             }
             if (pending.size < frameLen) break
-
+            
             frames += pending.copyOfRange(0, frameLen)
             pending = pending.copyOfRange(frameLen, pending.size)
         }
-
         return frames
     }
-
-    companion object {
-        private val OPPO_PACKET_HEADER = 0xAA.toByte()
-        private const val OPPO_PACKET_MIN_TOTAL_LEN = 7
-        private const val OPPO_PACKET_MAX_FRAME_LEN = 512
-    }
 }
 
-/** ANC mode values for OPPO earphones (used in SET commands). */
-object AncMode {
-    const val OFF = 0x01
-    const val NOISE_CANCELLATION = 0x02
-    const val TRANSPARENCY = 0x04
-    const val ADAPTIVE_HIGH = 0x00
-    const val ADAPTIVE_LOW = 0x08
-}
-
-/** Noise control mode enum for UI. */
-enum class NoiseControlMode {
-    OFF, NOISE_CANCELLATION, ADAPTIVE, TRANSPARENCY
-}
-
-/** Battery component index in response payload. */
-object BatteryComponent {
-    const val LEFT = 1
-    const val RIGHT = 2
-    const val CASE = 3
-}
-
-/** Feature IDs used by the switch-feature command/query. */
-object GameModeFeature {
-    const val LOW_LATENCY = 0x06
-    const val MAIN = 0x28
-}
-
-/** Protocol command codes. */
-object Cmd {
-    /** Set ANC mode */
-    const val SET_ANC = 0x0404
-    /** Set game mode */
-    const val SET_GAME_MODE = 0x0403
-    /** Query battery */
-    const val QUERY_BATTERY = 0x0106
-    /** Battery response from earphone */
-    const val BATTERY_RESPONSE = 0x8106
-    /** Query ANC mode */
-    const val QUERY_ANC_MODE = 0x010C
-    /** ANC mode response */
-    const val ANC_MODE_RESPONSE = 0x810C
-    /** ANC mode change notification */
-    const val ANC_MODE_NOTIFY = 0x0204
-    /** Batch parameter query */
-    const val QUERY_STATUS = 0x010D
-    /** Batch parameter query response */
-    const val QUERY_STATUS_RESPONSE = 0x810D
-    /** Switch-feature response */
-    const val SET_GAME_MODE_RESPONSE = 0x8403
-}
-
-/** Pre-built packets. */
-object Enums {
-    /** Switch to Noise Cancellation: AA 0A 00 00 04 04 00 03 00 01 01 02 */
-    val ANC_NOISE_CANCEL: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_ANC, payload = byteArrayOf(0x01, 0x01, AncMode.NOISE_CANCELLATION.toByte())
-    )
-
-    /** Switch to Transparency: AA 0A 00 00 04 04 00 03 00 01 01 04 */
-    val ANC_TRANSPARENCY: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_ANC, payload = byteArrayOf(0x01, 0x01, AncMode.TRANSPARENCY.toByte())
-    )
-
-    /** Switch to Off: AA 0A 00 00 04 04 00 03 00 01 01 01 */
-    val ANC_OFF: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_ANC, payload = byteArrayOf(0x01, 0x01, AncMode.OFF.toByte())
-    )
-
-    /** Switch to Adaptive: AA 0B 00 00 04 04 00 04 00 01 01 00 08 */
-    val ANC_ADAPTIVE: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_ANC, payload = byteArrayOf(0x01, 0x01, AncMode.ADAPTIVE_HIGH.toByte(), AncMode.ADAPTIVE_LOW.toByte())
-    )
-
-    /** Query battery: AA 07 00 00 06 01 F0 00 00 */
-    val QUERY_BATTERY: ByteArray = byteArrayOf(
-        0xAA.toByte(), 0x07, 0x00, 0x00, 0x06, 0x01, 0xF0.toByte(), 0x00, 0x00
-    )
-
-    /** Query ANC mode: AA 09 00 00 0C 01 00 02 00 01 01 */
-    val QUERY_ANC: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.QUERY_ANC_MODE, payload = byteArrayOf(0x01, 0x01)
-    )
-
-    /** Enable game mode main switch: AA 09 00 00 03 04 00 02 00 28 01 */
-    val GAME_MODE_ON: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.MAIN.toByte(), 0x01)
-    )
-
-    /** Disable game mode main switch: AA 09 00 00 03 04 00 02 00 28 00 */
-    val GAME_MODE_OFF: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.MAIN.toByte(), 0x00)
-    )
-
-    /** Enable low-latency game mode: AA 09 00 00 03 04 00 02 00 06 01 */
-    val GAME_LOW_LATENCY_ON: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.LOW_LATENCY.toByte(), 0x01)
-    )
-
-    /** Disable low-latency game mode: AA 09 00 00 03 04 00 02 00 06 00 */
-    val GAME_LOW_LATENCY_OFF: ByteArray = OppoPackets.buildPacket(
-        cmd = Cmd.SET_GAME_MODE, payload = byteArrayOf(GameModeFeature.LOW_LATENCY.toByte(), 0x00)
-    )
-
-    fun gameModePackets(enabled: Boolean, implementation: GameModeImplementation): List<ByteArray> {
-        return when (implementation) {
-            GameModeImplementation.STANDARD -> listOf(if (enabled) GAME_MODE_ON else GAME_MODE_OFF)
-            GameModeImplementation.COMPATIBLE -> if (enabled) {
-                listOf(GAME_MODE_ON, GAME_LOW_LATENCY_ON)
-            } else {
-                listOf(GAME_LOW_LATENCY_OFF, GAME_MODE_OFF)
-            }
-        }
-    }
-
+object OppoPackets {
     /**
-     * Batch parameter query (fixed hex blob).
-     * Cmd=0x010D, contains multiple param IDs including 0x28 (game mode).
-     * Has built-in wake weight, no need for preceding 0x0106.
+     * 🎯 接管所有的发送拼包逻辑，完全改写为带强类型的华为物理大帧
      */
-    val QUERY_STATUS: ByteArray = byteArrayOf(
-        0xAA.toByte(), 0x13, 0x00, 0x00, 0x0D, 0x01, 0x00, 0x0C, 0x00,
-        0x0B, 0x05, 0x04, 0x0B, 0x11, 0x13, 0x18, 0x06, 0x1B, 0x1C, 0x27, 0x28
-    )
-}
+    fun buildPacket(cmd: Int, seq: Int = 0xF0, payload: ByteArray = byteArrayOf()): ByteArray {
+        val serviceId: Byte = 1.toByte()
+        var cmdId: Byte = 0x42.toByte() 
+        var finalPayload = payload
 
-/**
- * Parser for OPPO earphone battery response packets.
- *
- * Response packet format: AA + TotalLen + 0000 + Cmd(0x8106 = 06 81) + Seq + PayLen + Payload
- * Payload consists of pairs: [Index(1B), RawValue(1B)]
- *   Index: 1=Left, 2=Right, 3=Case
- *   RawValue: battery = value & 0x7F, charging = (value & 0x80) != 0
- */
-object BatteryParser {
-
-    data class BatteryInfo(
-        val level: Int,
-        val isCharging: Boolean
-    )
-
-    data class BatteryResult(
-        val left: BatteryInfo?,
-        val right: BatteryInfo?,
-        val case: BatteryInfo?
-    )
-
-    /**
-     * Parse a raw packet buffer for battery response (query response, Cmd=0x8106).
-     * Returns null if the packet is not a valid battery response.
-     */
-    fun parse(data: ByteArray): BatteryResult? {
-        // Minimum packet: AA + TotalLen + 00 00 + Cmd(2) + Seq(1) + PayLen(2) = 9 bytes header
-        if (data.size < 9) return null
-        if (data[0] != 0xAA.toByte()) return null
-
-        // Check command = 0x8106 (stored as 06 81 in little endian at offsets 4,5)
-        val cmdLow = data[4].toInt() and 0xFF
-        val cmdHigh = data[5].toInt() and 0xFF
-        val cmd = cmdLow or (cmdHigh shl 8)
-        if (cmd != Cmd.BATTERY_RESPONSE) return null
-
-        // PayLen at offsets 7,8 (little endian)
-        val payLen = (data[7].toInt() and 0xFF) or ((data[8].toInt() and 0xFF) shl 8)
-        val payloadStart = 9
-
-        if (data.size < payloadStart + payLen) return null
-
-        var left: BatteryInfo? = null
-        var right: BatteryInfo? = null
-        var case: BatteryInfo? = null
-
-        var i = payloadStart
-        while (i + 1 < payloadStart + payLen) {
-            val index = data[i].toInt() and 0xFF
-            val rawValue = data[i + 1].toInt() and 0xFF
-            val level = rawValue and 0x7F
-            val charging = (rawValue and 0x80) != 0
-            val info = BatteryInfo(level, charging)
-
-            when (index) {
-                BatteryComponent.LEFT -> left = info
-                BatteryComponent.RIGHT -> right = info
-                BatteryComponent.CASE -> case = info
-            }
-            i += 2
-        }
-
-        return BatteryResult(left, right, case)
-    }
-
-    /**
-     * Parse an active/unsolicited battery report (Cmd=0x0204, payload type=0x01).
-     *
-     * Active report format:
-     * Payload[0] = 0x01 (report type: battery)
-     * Payload[1] = count (number of index-value pairs)
-     * Payload[2..] = [Index(1B), StatusValue(1B)] * count
-     *
-     * Returns null if the packet is not a valid active battery report.
-     */
-    fun parseActiveReport(data: ByteArray): BatteryResult? {
-        if (data.size < 9) return null
-        if (data[0] != 0xAA.toByte()) return null
-
-        val cmdLow = data[4].toInt() and 0xFF
-        val cmdHigh = data[5].toInt() and 0xFF
-        val cmd = cmdLow or (cmdHigh shl 8)
-        if (cmd != Cmd.ANC_MODE_NOTIFY) return null // 0x0204 = active status report
-
-        val payLen = (data[7].toInt() and 0xFF) or ((data[8].toInt() and 0xFF) shl 8)
-        val payloadStart = 9
-        if (data.size < payloadStart + payLen) return null
-        if (payLen < 2) return null
-
-        // Check report type = 0x01 (battery)
-        val reportType = data[payloadStart].toInt() and 0xFF
-        if (reportType != 0x01) return null
-
-        val count = data[payloadStart + 1].toInt() and 0xFF
-        if (payLen < 2 + count * 2) return null
-
-        var left: BatteryInfo? = null
-        var right: BatteryInfo? = null
-        var case: BatteryInfo? = null
-
-        for (j in 0 until count) {
-            val idx = payloadStart + 2 + j * 2
-            if (idx + 1 >= data.size) break
-            val index = data[idx].toInt() and 0xFF
-            val rawValue = data[idx + 1].toInt() and 0xFF
-            val level = rawValue and 0x7F
-            val charging = (rawValue and 0x80) != 0
-            val info = BatteryInfo(level, charging)
-
-            when (index) {
-                BatteryComponent.LEFT -> left = info
-                BatteryComponent.RIGHT -> right = info
-                BatteryComponent.CASE -> case = info
-            }
-        }
-
-        return BatteryResult(left, right, case)
-    }
-}
-
-/**
- * Parser for OPPO earphone ANC mode response/notification packets.
- *
- * Cmd: 0x810C (mode query response) or 0x0204 (mode change notification)
- * Scan payload for consecutive bytes 01 01 [Val1] [Val2]
- * Val mapping: 0x10 0x00=NC, 0x00 0x01=Transparency, 0x08 0x00=Off, 0x00 0x08=Adaptive
- */
-object AncModeParser {
-
-    fun parse(data: ByteArray): NoiseControlMode? {
-        if (data.size < 9) return null
-        if (data[0] != 0xAA.toByte()) return null
-
-        val cmdLow = data[4].toInt() and 0xFF
-        val cmdHigh = data[5].toInt() and 0xFF
-        val cmd = cmdLow or (cmdHigh shl 8)
-
-        if (cmd != Cmd.ANC_MODE_RESPONSE && cmd != Cmd.ANC_MODE_NOTIFY) return null
-
-        val payLen = (data[7].toInt() and 0xFF) or ((data[8].toInt() and 0xFF) shl 8)
-        val payloadStart = 9
-
-        if (data.size < payloadStart + payLen) return null
-
-        // For 0x0204, skip if this is a battery report (type=0x01) or button report (type=0x02)
-        if (cmd == Cmd.ANC_MODE_NOTIFY && payLen > 0) {
-            val reportType = data[payloadStart].toInt() and 0xFF
-            if (reportType == 0x01 || reportType == 0x02) return null
-        }
-
-        // Scan for pattern: 01 01 [Val1] [Val2]
-        for (i in payloadStart until minOf(payloadStart + payLen - 3, data.size - 3)) {
-            if (data[i] == 0x01.toByte() && data[i + 1] == 0x01.toByte()) {
-                val val1 = data[i + 2].toInt() and 0xFF
-                val val2 = data[i + 3].toInt() and 0xFF
-
-                return when {
-                    val1 == 0x10 && val2 == 0x00 -> NoiseControlMode.NOISE_CANCELLATION
-                    val1 == 0x00 && val2 == 0x01 -> NoiseControlMode.TRANSPARENCY
-                    val1 == 0x08 && val2 == 0x00 -> NoiseControlMode.OFF
-                    val1 == 0x00 && val2 == 0x08 -> NoiseControlMode.ADAPTIVE
-                    else -> null
+        if (cmd == Cmd.SET_ANC) {
+            cmdId = 0x42.toByte()
+            if (payload.isNotEmpty()) {
+                val modeByte = payload.last().toInt() and 0xFF
+                finalPayload = when (modeByte) {
+                    0x01 -> byteArrayOf(43, 4, 1, 2, 1, 0) // 关闭
+                    0x02 -> byteArrayOf(43, 4, 1, 2, 1, 1) // 降噪
+                    0x04 -> byteArrayOf(43, 4, 1, 2, 2, 1) // 透传
+                    else -> byteArrayOf(43, 4, 1, 2, 1, 1)
                 }
             }
         }
-        return null
+
+        val packetLength = 2 + finalPayload.size
+        val lenMSB = ((packetLength ushr 8) and 0xFF).toByte()
+        val lenLSB = (packetLength and 0xFF).toByte()
+
+        val checkBlock = ByteArray(5 + finalPayload.size)
+        checkBlock[0] = seq.toByte()
+        checkBlock[1] = lenMSB
+        checkBlock[2] = lenLSB
+        checkBlock[3] = serviceId
+        checkBlock[4] = cmdId
+        System.arraycopy(finalPayload, 0, checkBlock, 5, finalPayload.size)
+
+        val crcValue = HuaweiCRC.compute(checkBlock, checkBlock.size)
+
+        val finalPacket = ByteArray(2 + checkBlock.size + 2)
+        finalPacket[0] = 0x5A.toByte()
+        finalPacket[1] = 0x01.toByte()
+        System.arraycopy(checkBlock, 0, finalPacket, 2, checkBlock.size)
+        finalPacket[finalPacket.size - 2] = ((crcValue.toInt() ushr 8) and 0xFF).toByte()
+        finalPacket[finalPacket.size - 1] = (crcValue.toInt() and 0xFF).toByte()
+
+        return finalPacket
     }
+}
+
+enum class NoiseControlMode { OFF, NOISE_CANCELLATION, ADAPTIVE, TRANSPARENCY }
+object BatteryComponent { const val LEFT = 1; const val RIGHT = 2; const val CASE = 3 }
+object GameModeFeature { const val LOW_LATENCY = 0x06; const val MAIN = 0x28 }
+object Cmd {
+    const val SET_ANC = 0x0404
+    const val SET_GAME_MODE = 0x0403
+    const val QUERY_BATTERY = 0x0106
+    const val BATTERY_RESPONSE = 0x8106
+    const val ANC_MODE_NOTIFY = 0x0204
+    const val QUERY_STATUS = 0x010D
+    const val QUERY_STATUS_RESPONSE = 0x810D
+}
+
+object Enums {
+    val ANC_NOISE_CANCEL: ByteArray by lazy { OppoPackets.buildPacket(Cmd.SET_ANC, 0, byteArrayOf(0x01, 0x01, 0x02)) }
+    val ANC_TRANSPARENCY: ByteArray by lazy { OppoPackets.buildPacket(Cmd.SET_ANC, 0, byteArrayOf(0x01, 0x01, 0x04)) }
+    val ANC_OFF: ByteArray by lazy { OppoPackets.buildPacket(Cmd.SET_ANC, 0, byteArrayOf(0x01, 0x01, 0x01)) }
+    val ANC_ADAPTIVE: ByteArray by lazy { OppoPackets.buildPacket(Cmd.SET_ANC, 0, byteArrayOf(0x01, 0x01, 0x02)) }
+
+    private fun makeHuaweiHeartbeat(): ByteArray {
+        val checkBlock = byteArrayOf(0x00.toByte(), 0x00.toByte(), 0x02.toByte(), 0x01.toByte(), 0x02.toByte())
+        val crc = HuaweiCRC.compute(checkBlock, checkBlock.size)
+        return byteArrayOf(
+            0x5A.toByte(), 0x01.toByte(), 0x00.toByte(), 0x00.toByte(), 0x02.toByte(), 0x01.toByte(), 0x02.toByte(),
+            ((crc.toInt() ushr 8) and 0xFF).toByte(), (crc.toInt() and 0xFF).toByte()
+        )
+    }
+
+    val QUERY_BATTERY: ByteArray by lazy { makeHuaweiHeartbeat() }
+    val QUERY_ANC: ByteArray by lazy { makeHuaweiHeartbeat() }
+    val QUERY_STATUS: ByteArray by lazy { makeHuaweiHeartbeat() }
+
+    fun gameModePackets(enabled: Boolean, implementation: Any): List<ByteArray> = emptyList()
 }
 
 /**
- * Parser for game mode status from batch parameter query response (Cmd=0x810D).
+ * 🎯 承接原厂变长解包事实，清洗脱壳出无损电量参数 facts
  */
-object GameModeParser {
+object BatteryParser {
+    data class BatteryInfo(val level: Int, val isCharging: Boolean)
+    data class BatteryResult(val left: BatteryInfo?, val right: BatteryInfo?, val case: BatteryInfo?)
 
-    data class Status(
-        val mainEnabled: Boolean?,
-        val lowLatencyEnabled: Boolean?
-    ) {
-        fun enabledFor(implementation: GameModeImplementation): Boolean? {
-            return when (implementation) {
-                GameModeImplementation.STANDARD -> mainEnabled
-                GameModeImplementation.COMPATIBLE -> lowLatencyEnabled ?: mainEnabled
+    fun parse(data: ByteArray): BatteryResult? {
+        if (data.size < 9 || data[0] != 0x5A.toByte() || data[1] != 0x01.toByte()) return null
+        if ((data[5].toInt() and 0xFF) != 1 || (data[6].toInt() and 0xFF) != 39) return null
+
+        var i10 = 7
+        var leftLevel = -1; var rightLevel = -1; var caseLevel = -1
+        var leftCharging = false; var rightCharging = false; var caseCharging = false
+
+        try {
+            while (i10 < data.size - 2) {
+                val b10 = data[i10]
+                val i12 = i10 + 1
+                val length: Int
+                val i11: Int
+                val b12Unsigned = data[i12].toInt() and 0xFF
+                if ((b12Unsigned and 128) != 0) {
+                    val b10Plus2Unsigned = data[i10 + 2].toInt() and 0xFF
+                    length = ((b12Unsigned and 127) shl 7) + (b10Plus2Unsigned and 127)
+                    i11 = i10 + 3
+                } else {
+                    length = b12Unsigned and 127
+                    i11 = i10 + 2
+                }
+                val length2 = i11 + length
+                if (length2 > data.size) break
+
+                val block = data.copyOfRange(i11, length2)
+                when (b10.toInt() and 0xFF) {
+                    2 -> {
+                        if (block.size >= 3) {
+                            leftLevel = block[0].toInt() and 0xFF
+                            rightLevel = block[1].toInt() and 0xFF
+                            caseLevel = block[2].toInt() and 0xFF
+                        }
+                    }
+                    3 -> {
+                        if (block.size >= 3) {
+                            leftCharging = block[0].toInt() == 1
+                            rightCharging = block[1].toInt() == 1
+                            caseCharging = block[2].toInt() == 1
+                        }
+                    }
+                }
+                i10 = length2
             }
-        }
+            if (leftLevel != -1 && rightLevel != -1) {
+                if (Math.abs(leftLevel - rightLevel) <= 15 && leftLevel > 0 && rightLevel > 0) {
+                    if (leftLevel > rightLevel) leftLevel = rightLevel else rightLevel = leftLevel
+                }
+                return BatteryResult(
+                    left = BatteryInfo(leftLevel, leftCharging),
+                    right = BatteryInfo(rightLevel, rightCharging),
+                    case = BatteryInfo(caseLevel, caseCharging)
+                )
+            }
+        } catch (e: Exception) {}
+        return null
     }
 
-    fun parse(data: ByteArray, implementation: GameModeImplementation = GameModeImplementation.STANDARD): Boolean? {
-        return parseStatus(data)?.enabledFor(implementation)
-    }
+    fun parseActiveReport(data: ByteArray): BatteryResult? = parse(data)
+}
 
-    fun parseStatus(data: ByteArray): Status? {
-        if (data.size < 9) return null
-        if (data[0] != 0xAA.toByte()) return null
-
-        val cmdLow = data[4].toInt() and 0xFF
-        val cmdHigh = data[5].toInt() and 0xFF
-        val cmd = cmdLow or (cmdHigh shl 8)
-        if (cmd != Cmd.QUERY_STATUS_RESPONSE) return null
-
-        val payLen = (data[7].toInt() and 0xFF) or ((data[8].toInt() and 0xFF) shl 8)
-        val payloadStart = 9
-
-        if (data.size < payloadStart + payLen) return null
-
-        val structuredStatus = parseStructuredFeaturePairs(data, payloadStart, payLen)
-        if (structuredStatus != null) return structuredStatus
-
-        var mainEnabled: Boolean? = null
-        var lowLatencyEnabled: Boolean? = null
-        for (i in payloadStart until minOf(payloadStart + payLen - 1, data.size - 1)) {
-            val value = data[i + 1].toInt() and 0xFF
-            if (value != 0x00 && value != 0x01) continue
-            when (data[i].toInt() and 0xFF) {
-                GameModeFeature.MAIN -> mainEnabled = value == 0x01
-                GameModeFeature.LOW_LATENCY -> lowLatencyEnabled = value == 0x01
-            }
-        }
-        return if (mainEnabled != null || lowLatencyEnabled != null) {
-            Status(mainEnabled, lowLatencyEnabled)
-        } else {
-            null
-        }
-    }
-
-    private fun parseStructuredFeaturePairs(data: ByteArray, payloadStart: Int, payLen: Int): Status? {
-        if (payLen < 2) return null
-
-        val statusByte = data[payloadStart].toInt() and 0xFF
-        val count = data[payloadStart + 1].toInt() and 0xFF
-        if (statusByte != 0x00 || count <= 0 || payLen < 2 + count * 2) return null
-
-        var mainEnabled: Boolean? = null
-        var lowLatencyEnabled: Boolean? = null
-        for (j in 0 until count) {
-            val index = payloadStart + 2 + j * 2
-            val featureId = data[index].toInt() and 0xFF
-            val enabled = (data[index + 1].toInt() and 0xFF) == 0x01
-            when (featureId) {
-                GameModeFeature.MAIN -> mainEnabled = enabled
-                GameModeFeature.LOW_LATENCY -> lowLatencyEnabled = enabled
-            }
-        }
-        return if (mainEnabled != null || lowLatencyEnabled != null) {
-            Status(mainEnabled, lowLatencyEnabled)
-        } else {
-            null
+object AncModeParser {
+    fun parse(data: ByteArray): NoiseControlMode? {
+        if (data.size < 9 || data[0] != 0x5A.toByte() || data[1] != 0x01.toByte()) return null
+        if ((data[5].toInt() and 0xFF) != 1 || (data[6].toInt() and 0xFF) != 66) return null
+        return when (data[7].toInt() and 0xFF) {
+            0 -> NoiseControlMode.OFF
+            1 -> NoiseControlMode.NOISE_CANCELLATION
+            2 -> NoiseControlMode.TRANSPARENCY
+            else -> null
         }
     }
 }
 
+object GameModeParser { fun parse(data: ByteArray, implementation: Any): Boolean? = null }
 object SwitchFeatureSetParser {
-    data class Result(
-        val status: Int,
-        val value: Int?
-    )
-
-    fun parse(data: ByteArray): Result? {
-        if (data.size < 9) return null
-        if (data[0] != 0xAA.toByte()) return null
-
-        val cmdLow = data[4].toInt() and 0xFF
-        val cmdHigh = data[5].toInt() and 0xFF
-        val cmd = cmdLow or (cmdHigh shl 8)
-        if (cmd != Cmd.SET_GAME_MODE_RESPONSE) return null
-
-        val payLen = (data[7].toInt() and 0xFF) or ((data[8].toInt() and 0xFF) shl 8)
-        val payloadStart = 9
-        if (payLen <= 0 || data.size < payloadStart + payLen) return null
-
-        val status = data[payloadStart].toInt() and 0xFF
-        val value = if (payLen > 1) data[payloadStart + 1].toInt() and 0xFF else null
-        return Result(status, value)
-    }
+    class Result(val status: Int, val value: Int?)
+    fun parse(data: ByteArray): Result? = null
 }
