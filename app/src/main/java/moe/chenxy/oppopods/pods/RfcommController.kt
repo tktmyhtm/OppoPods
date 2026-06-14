@@ -75,7 +75,11 @@ object RfcommController {
             override fun onReceive(c: Context?, intent: Intent?) {
                 when (intent?.action) {
                     OppoPodsAction.ACTION_ANC_SELECT -> {
-                        sendCommand(MbbCmd.ancCommand(intent.getIntExtra("status", 1)))
+                    val mode = when (intent.getIntExtra("status", 1)) {
+                         1 -> NoiseControlMode.OFF; 2 -> NoiseControlMode.NOISE_CANCELLATION
+                         3 -> NoiseControlMode.TRANSPARENCY; else -> NoiseControlMode.OFF
+}
+sendCommand(MbbCmd.ancCommand(mode))
                     }
                     OppoPodsAction.ACTION_REFRESH_STATUS -> {
                         sendCommand(MbbCmd.QUERY_BATTERY)
