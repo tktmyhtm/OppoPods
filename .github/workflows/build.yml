@@ -13,40 +13,24 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      # 🎯 终极真理：必须使用 JDK 22 匹配作者的高版本工具链，否则 AGP 9.1.0 会瞬间崩溃！
+      - name: Set up JDK 22
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '22'
           distribution: 'temurin'
           cache: gradle
-
-      # 🎯 核心版本修正：直接把依赖表里那个全网找不到的 2.3.20 强制掰回稳定版 2.0.20，绝杀依赖报错
-      - name: Patch Global Version Table
-        run: |
-          if [ -f "gradle/libs.versions.toml" ]; then
-            sed -i 's/kotlin = "2.3.20"/kotlin = "2.0.20"/g' gradle/libs.versions.toml
-          fi
 
       - name: Grant Execute Permission for Gradle
         run: chmod +x gradlew
 
-      # 🎯 终极全线通车命令：
-      # 不加任何子目录偏置，直接运行标准全局 `./gradlew assemble`！
-      # 顺便通过 -Pkotlin 强制覆盖内存，100% 绝杀 Task 找不到和依赖死锁的终极死穴！
-      - name: Build APK with Gradle Base Lifecycle
-        run: ./gradlew assemble -Pkotlin=2.0.20 --no-daemon
-
-      - name: Find and Isolate Output APK
-        id: sign
-        run: |
-          UNSIGNED_APK=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
-          OUT_NAME="HuaweiPods-LSPosed-v1.0.apk"
-          cp "$UNSIGNED_APK" "./$OUT_NAME"
-          echo "apk=$OUT_NAME" >> "$GITHUB_OUTPUT"
+      # 🎯 删掉所有画蛇添足的降级补丁，直接跑最正统的打包！
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Upload Verified Release APK
         uses: actions/upload-artifact@v4
         with:
           name: HuaweiPods-LSPosed-v1.0
-          path: ./HuaweiPods-LSPosed-v1.0.apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
