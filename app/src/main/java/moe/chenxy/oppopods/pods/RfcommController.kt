@@ -16,11 +16,13 @@ import java.util.UUID
 
 @SuppressLint("MissingPermission")
 object RfcommController {
+    private var lastConnectTime = 0L
+    private val BINDER_THROTTLE_MS = 2000L
     private const val TAG = "OppoPods-GATT"
     
     private val UUID_SERVICE = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
-   private val UUID_NOTIFY = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
-private val UUID_WRITE  = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
+    private val UUID_NOTIFY = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
+    private val UUID_WRITE = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
     private val UUID_DESCR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private var currentGatt: BluetoothGatt? = null
@@ -37,10 +39,11 @@ private val UUID_WRITE  = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb"
     private var lastAncMode: NoiseControlMode? = null
     private var lastBroadcastTime = 0L
 
-    fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
-        context = ctx.applicationContext
-        currentDevice = device
-        
+fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
+    val now = System.currentTimeMillis()
+    if (now - lastConnectTime < BINDER_THROTTLE_MS) return  // ← 加这行
+    lastConnectTime = now                                    // ← 加这行
+    context = ctx.applicationContext
         Log.e(TAG, "🚨🚨🚨 雷达触发！启动 BLE GATT 引擎，准备接管: ${device.address}")
         
         // 🛡️ 修复了这里的 Context 空指针编译错误！
