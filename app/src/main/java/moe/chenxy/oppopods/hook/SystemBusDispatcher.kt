@@ -93,9 +93,9 @@ object SystemBusDispatcher : HookContext() {
                     BluetoothDevice::class.java,
                     BluetoothGattCharacteristic::class.java
                 )
-                hookBefore(method) { hookLogic ->
-                    val device = hookLogic.args[0] as? BluetoothDevice ?: return@hookBefore
-                    val characteristic = hookLogic.args[1] as? BluetoothGattCharacteristic ?: return@hookBefore
+hookBefore(method) {
+    val device = args[0] as? BluetoothDevice ?: return@hookBefore
+    val characteristic = args[1] as? BluetoothGattCharacteristic ?: return@hookBefore
                     if (device.address != TARGET_MAC) return@hookBefore
 
                     @Suppress("DEPRECATION")
