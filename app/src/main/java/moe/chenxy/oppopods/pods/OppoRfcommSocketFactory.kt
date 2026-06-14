@@ -9,8 +9,7 @@ import java.util.UUID
 
 object OppoRfcommSocketFactory {
     private val preferredUuids = listOf(
-        UUID.fromString("00001101-0000-1000-8000-00805f9b34fb"), // 万能串口 SPP
-        UUID.fromString("00000003-0000-1000-8000-00805f9b34fb")  // 华为常见 RFCOMM 变种
+        UUID.fromString("00001101-0000-1000-8000-00805f9b34fb") // 万能经典蓝牙 SPP
     )
 
     @SuppressLint("MissingPermission")
@@ -22,40 +21,49 @@ object OppoRfcommSocketFactory {
     ): BluetoothSocket {
         val failures = mutableListOf<Exception>()
 
-        // 🚀 终极杀招：利用 LSPosed 最高豁免权，暴力扫射华为隐藏的物理射频信道！
-        // 优先尝试华为最爱用的 Channel 1, 2, 4, 15，然后遍历 1-30 所有的底层门牌号
-        val channelsToTry = listOf(1, 2, 4, 15, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20)
-        
-        for (channel in channelsToTry) {
-            try {
-                Log.d(logTag, "LSPosed特权引擎 -> 绕过防火墙，暴力强连隐藏通道 Channel $channel ...")
-                // 只有在 LSPosed 进程里，这种极高危的反射才不会被 Android 16 熔断！
-                val method = device::class.java.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-                method.isAccessible = true
-                val socket = method.invoke(device, channel) as BluetoothSocket
-                socket.connect() // 发起强行握手
-                
-                Log.d(logTag, "💥 大满贯！华为 FreeBuds 已在 Channel $channel 彻底并网通信！")
-                return socket
-            } catch (e: Exception) {
-                // 遇到 -1 拒收，直接静默换下一个通道继续轰炸
-                failures.add(e)
-            }
-        }
-
-        // 🚀 备用防线：如果物理信道全被屏蔽，退回测试公开 UUID
+        // 🚀 终极杀招一：使用 Insecure (无感非加密) 通道！
+        // 这是对付华为 FreeBuds MBB 协议拒收 (-1) 的最核心武器
         for (uuid in preferredUuids) {
             try {
-                Log.d(logTag, "物理通道扫射失败，尝试备用 UUID 通道: $uuid")
-                val socket = device.createRfcommSocketToServiceRecord(uuid)
+                Log.d(logTag, "LSPosed特权引擎 -> 尝试 Insecure (无感非加密) UUID: $uuid")
+                val socket = device.createInsecureRfcommSocketToServiceRecord(uuid)
                 socket.connect()
-                Log.d(logTag, "💥 成功！华为 FreeBuds 通过通用 UUID 建立隧道！")
+                Log.d(logTag, "💥 成功！华为 FreeBuds 通过 Insecure UUID 完美并网！")
                 return socket
             } catch (e: Exception) {
                 failures.add(e)
             }
         }
 
-        throw IOException("通信坍塌：所有物理信道与 UUID 均被华为底层固件拒绝！", failures.lastOrNull())
+        // 🚀 终极杀招二：暴力扫射华为隐藏的 Insecure 物理信道
+        val channelsToTry = listOf(1, 2, 3, 4, 15, 5, 6, 7, 8, 9, 10)
+        for (channel in channelsToTry) {
+            try {
+                Log.d(logTag, "尝试暴力破解 Insecure 隐藏信道: Channel $channel")
+                // 注意这里调用的是 Insecure (非加密) 的隐藏底层反射接口！
+                val method = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
+                method.isAccessible = true
+                val socket = method.invoke(device, channel) as BluetoothSocket
+                socket.connect()
+                Log.d(logTag, "💥 大满贯！华为 FreeBuds 已在 Insecure Channel $channel 强行建立通信隧道！")
+                return socket
+            } catch (e: Exception) {
+                failures.add(e)
+            }
+        }
+
+        // 🛡️ 备用防线：回退尝试传统 Secure (加密) 通道
+        for (uuid in preferredUuids) {
+            try {
+                Log.d(logTag, "退回尝试传统 Secure (加密) UUID: $uuid")
+                val socket = device.createRfcommSocketToServiceRecord(uuid)
+                socket.connect()
+                return socket
+            } catch (e: Exception) {
+                failures.add(e)
+            }
+        }
+
+        throw IOException("通信彻底坍塌：所有 Insecure 与 Secure 信道均被华为固件拒绝 (-1)", failures.lastOrNull())
     }
 }
