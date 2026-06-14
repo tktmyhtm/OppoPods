@@ -15,7 +15,7 @@ class HookLoader : IXposedHookLoadPackage {
     private val TARGET_MAC = "14:51:*:*:*:69" // 锁定老哥你的华为耳机真实MAC
 
     override fun handleLoadPackage(lpparam: LoadPackageParam) {
-        // 🎯 只注入红米系统的核心蓝牙进程，彻底脱离所有第三方类和App依赖
+        // 🎯 斩首行动：只注入红米系统的核心蓝牙进程
         if (lpparam.packageName != "com.android.bluetooth") return
 
         Log.e(TAG, "⚡ [中央总线已接管] 成功强行并网 HyperOS 系统蓝牙堆栈！")
@@ -41,14 +41,14 @@ class HookLoader : IXposedHookLoadPackage {
             )
 
             // ========================================================
-            // 🚀 正向无感广播：原地拦截特征值变化，修复了参数签名错位
+            // 🚀 正向无感广播：原地拦截特征值变化
             // ========================================================
             XposedHelpers.findAndHookMethod(
                 "com.android.bluetooth.gatt.GattService", 
                 lpparam.classLoader,
-                "onCharacteristicChanged", // 核心 BLE 吐数据闸口
-                BluetoothDevice::class.java, // 🛡️ 修正为原生 BluetoothDevice
-                BluetoothGattCharacteristic::class.java, // 🛡️ 修正为原生 Characteristic
+                "onCharacteristicChanged", 
+                BluetoothDevice::class.java, 
+                BluetoothGattCharacteristic::class.java, 
                 object : XC_MethodHook() {
                     private var cachedLeft = -1
                     private var cachedRight = -1
@@ -107,14 +107,14 @@ class HookLoader : IXposedHookLoadPackage {
             )
 
             // ========================================================
-            // 🚀 反向控制链调包：拦截迈凌控制面板的下发动作，修复了参数签名错位
+            // 🚀 反向控制链调包
             // ========================================================
             XposedHelpers.findAndHookMethod(
                 "com.android.bluetooth.gatt.GattService",
                 lpparam.classLoader,
                 "writeCharacteristic", 
-                BluetoothDevice::class.java, // 🛡️ 修正为原生 BluetoothDevice
-                BluetoothGattCharacteristic::class.java, // 🛡️ 修正为原生 Characteristic
+                BluetoothDevice::class.java, 
+                BluetoothGattCharacteristic::class.java, 
                 Int::class.java,
                 object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
@@ -135,9 +135,9 @@ class HookLoader : IXposedHookLoadPackage {
                             else -> byteArrayOf(0x5A, 0x01, 0x01) // 关闭
                         }
                         
-                        // 内存替换
+                        // 🛡️ 核心修复点：弃用 .value 赋值属性，改用标准原生显式方法调用，彻底粉碎 Kotlin 编译陷阱！
                         @Suppress("DEPRECATION")
-                        characteristic.value = huaweiPayload
+                        characteristic.setValue(huaweiPayload)
                         Log.e(TAG, "🔥 [调包成功] 降噪字节已被完美重写为华为原厂指令！")
                     }
                 }
