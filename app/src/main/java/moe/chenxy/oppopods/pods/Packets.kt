@@ -1,4 +1,4 @@
-package moe.chenxy.oppopods.pods
+package moe.chenxy.oppopods.po, ADAPTIVE }
 import android.util.Log
 
 object HuaweiCRC {
