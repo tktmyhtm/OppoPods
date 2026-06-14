@@ -146,4 +146,4 @@ object AncModeParser {
     }
 }
 
-enum class NoiseControlMode { OFF, NOISE_CANCELLATION, TRANSPARENCY }
+enum class NoiseControlMode { OFF, NOISE_CANCELLATION, TRANSPARENCY, ADAPTIVE }
