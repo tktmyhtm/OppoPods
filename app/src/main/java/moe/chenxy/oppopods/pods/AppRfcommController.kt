@@ -3,12 +3,10 @@ package moe.chenxy.oppopods.pods
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
-import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import moe.chenxy.oppopods.BuildConfig
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.BatteryParams
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.PodParams
 import java.io.IOException
@@ -20,34 +18,26 @@ class AppRfcommController {
         private const val TAG = "OppoPods-AppRfcomm"
         private const val BATTERY_POLL_INTERVAL_MS = 30_000L
     }
-
     enum class ConnectionState {
         DISCONNECTED, CONNECTING, CONNECTED, ERROR
     }
-
     private var socket: BluetoothSocket? = null
     private var isConnected = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var batteryPollJob: Job? = null
-
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState
-
     private val _batteryParams = MutableStateFlow(BatteryParams())
     val batteryParams: StateFlow<BatteryParams> = _batteryParams
-
     private val _ancMode = MutableStateFlow(NoiseControlMode.OFF)
     val ancMode: StateFlow<NoiseControlMode> = _ancMode
-
     private val _deviceName = MutableStateFlow("")
     val deviceName: StateFlow<String> = _deviceName
-
     fun connect(device: BluetoothDevice) {
         if (_connectionState.value == ConnectionState.CONNECTING) return
         _deviceName.value = device.name ?: device.address
         _connectionState.value = ConnectionState.CONNECTING
         batteryPollJob?.cancel()
-
         scope.launch {
             try {
                 delay(300)
@@ -68,7 +58,6 @@ class AppRfcommController {
             }
         }
     }
-
     private fun startBatteryPolling() {
         batteryPollJob?.cancel()
         batteryPollJob = scope.launch {
@@ -78,7 +67,6 @@ class AppRfcommController {
             }
         }
     }
-
     private fun startPacketReader(inputStream: InputStream) {
         scope.launch {
             val buffer = ByteArray(1024)
@@ -96,7 +84,6 @@ class AppRfcommController {
             if (isConnected) disconnect()
         }
     }
-
     private fun handlePacket(packet: ByteArray) {
         val battery = BatteryParser.parseSpp(packet)
         if (battery != null) {
@@ -106,7 +93,6 @@ class AppRfcommController {
             _batteryParams.value = BatteryParams(left, right, case)
             return
         }
-
         val anc = AncModeParser.parseSpp(packet)
         if (anc != null) {
             Log.d(TAG, "ANC mode received: $anc")
@@ -114,12 +100,10 @@ class AppRfcommController {
             return
         }
     }
-
     private fun sendPacket(packet: ByteArray) {
         try { socket?.outputStream?.write(packet); socket?.outputStream?.flush() }
         catch (e: IOException) { Log.e(TAG, "Send failed", e) }
     }
-
     fun setANCMode(mode: NoiseControlMode) {
         val mbbMode = when (mode) {
             NoiseControlMode.OFF -> 1
@@ -130,7 +114,6 @@ class AppRfcommController {
         _ancMode.value = mode
         scope.launch { sendPacket(MbbCmd.ancCommand(mbbMode)) }
     }
-
     private fun queryStatus() {
         scope.launch {
             sendPacket(MbbCmd.QUERY_BATTERY)
@@ -138,9 +121,7 @@ class AppRfcommController {
             sendPacket(MbbCmd.QUERY_ANC)
         }
     }
-
     fun refreshStatus() { if (isConnected) queryStatus() }
-
     fun disconnect() {
         isConnected = false
         batteryPollJob?.cancel()
