@@ -16,10 +16,8 @@ import java.util.UUID
 
 @SuppressLint("MissingPermission")
 object RfcommController {
-    private var lastConnectTime = 0L
-    private val BINDER_THROTTLE_MS = 2000L
     private const val TAG = "OppoPods-GATT"
-    
+
     private val UUID_SERVICE = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
     private val UUID_NOTIFY = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
     private val UUID_WRITE = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
@@ -31,28 +29,32 @@ object RfcommController {
     private var context: Context? = null
     private var currentDevice: BluetoothDevice? = null
     private var commandReceiver: BroadcastReceiver? = null
-    
+
     private val framer = OppoPacketFramer()
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var lastBatteryResult: BatteryParser.BatteryResult? = null
     private var lastAncMode: NoiseControlMode? = null
     private var lastBroadcastTime = 0L
+    private var lastConnectTime = 0L
+    private val GLOBAL_THROTTLE_MS = 2000L
 
-fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
-    val now = System.currentTimeMillis()
-    if (now - lastConnectTime < BINDER_THROTTLE_MS) return  // ← 加这行
-    lastConnectTime = now                                    // ← 加这行
-    context = ctx.applicationContext
-        Log.e(TAG, "🚨🚨🚨 雷达触发！启动 BLE GATT 引擎，准备接管: ${device.address}")
-        
-        // 🛡️ 修复了这里的 Context 空指针编译错误！
-        mainHandler.post { 
+    fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
+        val now = System.currentTimeMillis()
+        if (now - lastConnectTime < GLOBAL_THROTTLE_MS) return
+        lastConnectTime = now
+
+        context = ctx.applicationContext
+        currentDevice = device
+
+        Log.e(TAG, "🚨 捕获 FreeBuds，启动 GATT: ${device.address}")
+
+        mainHandler.post {
             context?.let { safeCtx ->
-                Toast.makeText(safeCtx, "LSPosed: 捕获 FreeBuds，防止拥堵启动!", Toast.LENGTH_LONG).show() 
+                Toast.makeText(safeCtx, "LSPosed: 捕获 FreeBuds", Toast.LENGTH_LONG).show()
             }
         }
-        
+
         disconnect()
         registerReceiver()
         currentGatt = device.connectGatt(context, false, gattCallback)
@@ -60,7 +62,7 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
 
     fun disconnectedPod(ctx: Context, device: BluetoothDevice) {
         if (currentDevice?.address == device.address) {
-            Log.e(TAG, "🚨🚨🚨 检测到耳机断开！")
+            Log.e(TAG, "🚨 耳机断开")
             disconnect()
             broadcastDisconnected(ctx, device)
         }
@@ -120,20 +122,19 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
             char.value = cmd
             @Suppress("DEPRECATION")
             gatt.writeCharacteristic(char)
-            Log.e(TAG, "🚀 BLE 指令下发: ${cmd.joinToString("") { "%02X".format(it) }}")
+            Log.e(TAG, "🚀 BLE 指令: ${cmd.joinToString("") { "%02X".format(it) }}")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ 指令下发坍塌", e)
+            Log.e(TAG, "❌ 指令下发失败", e)
         }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.e(TAG, "✅ 物理链路握手成功！扫描 fe01 服务...")
+                Log.e(TAG, "✅ GATT 连接成功，发现服务...")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 disconnect()
-                context?.let { ctx -> currentDevice?.let { dev -> broadcastDisconnected(ctx, dev) } }
             }
         }
 
@@ -142,7 +143,7 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
                 val service = gatt.getService(UUID_SERVICE) ?: return
                 writeChar = service.getCharacteristic(UUID_WRITE)
                 val notifyChar = service.getCharacteristic(UUID_NOTIFY)
-                
+
                 if (notifyChar != null) {
                     gatt.setCharacteristicNotification(notifyChar, true)
                     val descriptor = notifyChar.getDescriptor(UUID_DESCR)
@@ -153,11 +154,10 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
                         gatt.writeDescriptor(descriptor)
                     }
                 }
-                
+
                 isConnected = true
-                Log.e(TAG, "🎉 华为 FreeBuds 彻底并网！")
-                context?.let { ctx -> currentDevice?.let { dev -> broadcastConnected(ctx, dev) } }
-                
+                Log.e(TAG, "🎉 FreeBuds 并网成功！")
+
                 sendCommand(Enums.QUERY_BATTERY)
                 sendCommand(Enums.QUERY_ANC)
             }
@@ -176,11 +176,14 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
     private fun processData(data: ByteArray) {
         val frames = framer.append(data, data.size)
         val now = System.currentTimeMillis()
+        // 全局节流阀：至少间隔 3 秒才能发一次广播
+        if (now - lastBroadcastTime < 3000) return
+        lastBroadcastTime = now
 
         for (frame in frames) {
             val battery = BatteryParser.parse(frame)
             val anc = AncModeParser.parse(frame)
-            
+
             var stateChanged = false
 
             if (battery != null && battery != lastBatteryResult) {
@@ -192,22 +195,19 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
                 stateChanged = true
             }
 
-            if (stateChanged || (now - lastBroadcastTime > 3000)) {
-                lastBroadcastTime = now
-                Log.e(TAG, "📤 节流放行：向系统发送电量/降噪更新广播！")
-                
-                // 🛡️ 修复了这里的强转编译报错！
+            if (stateChanged) {
+                Log.e(TAG, "📤 放行广播")
+
                 val currentBattery = lastBatteryResult
                 if (currentBattery != null) broadcastBattery(currentBattery)
-                
+
                 val currentAnc = lastAncMode
                 if (currentAnc != null) broadcastAnc(currentAnc)
-                
-                // 🛡️ 修复了这里的 Toast 弹窗编译报错！
-                mainHandler.post { 
+
+                mainHandler.post {
                     context?.let { ctx ->
                         currentBattery?.let { b ->
-                            Toast.makeText(ctx, "LSPosed 电量获取成功!\n左:${b.left?.level} 右:${b.right?.level}", Toast.LENGTH_SHORT).show() 
+                            Toast.makeText(ctx, "电量: 左:${b.left?.level} 右:${b.right?.level}", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -219,21 +219,17 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
         val intent = Intent(OppoPodsAction.ACTION_PODS_CONNECTED).apply {
             putExtra("address", device.address)
             putExtra("device_name", device.name ?: "Huawei FreeBuds")
-            setPackage("com.android.settings")
         }
         ctx.sendBroadcast(intent)
-        intent.setPackage("com.milink.service")
-        ctx.sendBroadcast(intent)
+        Log.e(TAG, "📤 broadcastConnected")
     }
 
     private fun broadcastDisconnected(ctx: Context, device: BluetoothDevice) {
         val intent = Intent(OppoPodsAction.ACTION_PODS_DISCONNECTED).apply {
             putExtra("address", device.address)
-            setPackage("com.android.settings")
         }
         ctx.sendBroadcast(intent)
-        intent.setPackage("com.milink.service")
-        ctx.sendBroadcast(intent)
+        Log.e(TAG, "📤 broadcastDisconnected")
     }
 
     private fun broadcastBattery(battery: BatteryParser.BatteryResult) {
@@ -250,10 +246,8 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
             putExtra("case_charging", battery.case?.isCharging ?: false)
             putExtra("case_connected", battery.case != null)
         }
-        intent.setPackage("com.android.settings")
         ctx.sendBroadcast(intent)
-        intent.setPackage("com.milink.service")
-        ctx.sendBroadcast(intent)
+        Log.e(TAG, "📤 broadcastBattery")
     }
 
     private fun broadcastAnc(anc: NoiseControlMode) {
@@ -268,9 +262,7 @@ fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?)
             putExtra("address", currentDevice?.address)
             putExtra("status", status)
         }
-        intent.setPackage("com.android.settings")
         ctx.sendBroadcast(intent)
-        intent.setPackage("com.milink.service")
-        ctx.sendBroadcast(intent)
+        Log.e(TAG, "📤 broadcastAnc")
     }
 }
