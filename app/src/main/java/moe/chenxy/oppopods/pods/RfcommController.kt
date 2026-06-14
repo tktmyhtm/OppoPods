@@ -7,7 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import moe.chenxy.oppopods.utils.miuiStrongToast.data.OppoPodsAction
 import java.util.UUID
 
@@ -15,11 +18,10 @@ import java.util.UUID
 object RfcommController {
     private const val TAG = "OppoPods-GATT"
     
-    // 🎯 直接挂载咱们挖出来的华为 FreeBuds 真实 BLE GATT 通信矩阵！
     private val UUID_SERVICE = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
     private val UUID_NOTIFY = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
     private val UUID_WRITE = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
-    private val UUID_DESCR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb") // 开启监听的标准描述符
+    private val UUID_DESCR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private var currentGatt: BluetoothGatt? = null
     private var writeChar: BluetoothGattCharacteristic? = null
@@ -29,22 +31,25 @@ object RfcommController {
     private var commandReceiver: BroadcastReceiver? = null
     
     private val framer = OppoPacketFramer()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     fun connectPod(ctx: Context, device: BluetoothDevice, prefs: SharedPreferences?) {
         context = ctx.applicationContext
         currentDevice = device
         
-        Log.d(TAG, "LSPosed引擎 -> 彻底抛弃旧串口，启动纯血华为 BLE GATT 协议栈: ${device.address}")
+        // 🚨 强行用 Error 级别打日志，撕开系统的过滤网！
+        Log.e(TAG, "🚨🚨🚨 雷达触发！开始启动 BLE GATT: ${device.address}")
+        // 🚨 直接在屏幕下方弹窗，让你肉眼看见模块是否活着！
+        mainHandler.post { Toast.makeText(context, "LSPosed: 捕获 FreeBuds，开始并网!", Toast.LENGTH_LONG).show() }
         
         disconnect()
         registerReceiver()
-        
-        // Android 16/HyperOS 特权进程直接发起无感低功耗并网！
         currentGatt = device.connectGatt(context, false, gattCallback)
     }
 
     fun disconnectedPod(ctx: Context, device: BluetoothDevice) {
         if (currentDevice?.address == device.address) {
+            Log.e(TAG, "🚨🚨🚨 雷达触发！检测到耳机断开！")
             disconnect()
             broadcastDisconnected(ctx, device)
         }
@@ -98,16 +103,17 @@ object RfcommController {
             char.value = cmd
             @Suppress("DEPRECATION")
             gatt.writeCharacteristic(char)
-            Log.d(TAG, "🚀 BLE 通道下发高维指令: ${cmd.joinToString("") { "%02X".format(it) }}")
+            Log.e(TAG, "🚀 BLE 指令下发: ${cmd.joinToString("") { "%02X".format(it) }}")
         } catch (e: Exception) {
-            Log.e(TAG, "GATT 指令下发坍塌", e)
+            Log.e(TAG, "❌ GATT 指令下发坍塌", e)
         }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                Log.d(TAG, "✅ BLE 物理链路已握手！开始扫描 fe01 私有服务...")
+                Log.e(TAG, "✅ BLE 物理链路已握手！扫描 fe01 服务...")
+                mainHandler.post { Toast.makeText(context, "LSPosed: BLE已连上，正在获取电量...", Toast.LENGTH_SHORT).show() }
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.e(TAG, "❌ BLE 链路断开")
@@ -120,7 +126,7 @@ object RfcommController {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 val service = gatt.getService(UUID_SERVICE)
                 if (service == null) {
-                    Log.e(TAG, "❌ 致命错误：当前耳机未暴露华为 MBB 服务 $UUID_SERVICE")
+                    Log.e(TAG, "❌ 致命错误：当前耳机未暴露私有服务 $UUID_SERVICE")
                     return
                 }
                 
@@ -135,17 +141,18 @@ object RfcommController {
                         descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                         @Suppress("DEPRECATION")
                         gatt.writeDescriptor(descriptor)
-                        Log.d(TAG, "✅ 已强行挂载 Notify 监听队列: $UUID_NOTIFY")
+                        Log.e(TAG, "✅ 已挂载 Notify 监听队列")
                     }
                 }
                 
                 isConnected = true
-                Log.d(TAG, "🎉 大满贯！华为 FreeBuds 彻底通过 BLE GATT 并网！")
+                Log.e(TAG, "🎉 大满贯！华为 FreeBuds 彻底通过 BLE GATT 并网！")
                 context?.let { currentDevice?.let { dev -> broadcastConnected(it, dev) } }
                 
-                // 🚀 主动连环发送心跳包，把它的电量和降噪状态逼出来
                 sendCommand(Enums.QUERY_BATTERY)
                 sendCommand(Enums.QUERY_ANC)
+            } else {
+                Log.e(TAG, "❌ 扫描服务失败，状态码: $status")
             }
         }
 
@@ -162,17 +169,17 @@ object RfcommController {
     private fun processData(data: ByteArray) {
         val frames = framer.append(data, data.size)
         for (frame in frames) {
-            Log.d(TAG, "📥 捕获底层 MBB 帧: ${frame.joinToString("") { "%02X".format(it) }}")
+            Log.e(TAG, "📥 捕获底层 MBB 帧: ${frame.joinToString("") { "%02X".format(it) }}")
             
             val battery = BatteryParser.parse(frame)
             if (battery != null) {
-                Log.d(TAG, "🔋 脱壳电量: 左${battery.left?.level} 右${battery.right?.level} 舱${battery.case?.level}")
+                Log.e(TAG, "🔋 脱壳电量: 左${battery.left?.level} 右${battery.right?.level} 舱${battery.case?.level}")
                 broadcastBattery(battery)
             }
             
             val anc = AncModeParser.parse(frame)
             if (anc != null) {
-                Log.d(TAG, "🎧 脱壳降噪模式: $anc")
+                Log.e(TAG, "🎧 脱壳降噪: $anc")
                 broadcastAnc(anc)
             }
         }
