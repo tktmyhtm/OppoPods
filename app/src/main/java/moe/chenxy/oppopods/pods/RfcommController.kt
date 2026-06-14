@@ -19,8 +19,8 @@ object RfcommController {
     private const val TAG = "OppoPods-GATT"
     
     private val UUID_SERVICE = UUID.fromString("0000fe01-0000-1000-8000-00805f9b34fb")
-    private val UUID_NOTIFY = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
-    private val UUID_WRITE = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
+   private val UUID_NOTIFY = UUID.fromString("0000fe03-0000-1000-8000-00805f9b34fb")
+private val UUID_WRITE  = UUID.fromString("0000fe02-0000-1000-8000-00805f9b34fb")
     private val UUID_DESCR = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private var currentGatt: BluetoothGatt? = null
