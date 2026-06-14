@@ -33,7 +33,6 @@ object RfcommController {
     private val framer = OppoPacketFramer()
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // 🛡️ 状态缓存池：用来拦截冗余广播
     private var lastBatteryResult: BatteryParser.BatteryResult? = null
     private var lastAncMode: NoiseControlMode? = null
     private var lastBroadcastTime = 0L
@@ -43,7 +42,13 @@ object RfcommController {
         currentDevice = device
         
         Log.e(TAG, "🚨🚨🚨 雷达触发！启动 BLE GATT 引擎，准备接管: ${device.address}")
-        mainHandler.post { Toast.makeText(context, "LSPosed: 捕获 FreeBuds，防止拥堵启动!", Toast.LENGTH_LONG).show() }
+        
+        // 🛡️ 修复了这里的 Context 空指针编译错误！
+        mainHandler.post { 
+            context?.let { safeCtx ->
+                Toast.makeText(safeCtx, "LSPosed: 捕获 FreeBuds，防止拥堵启动!", Toast.LENGTH_LONG).show() 
+            }
+        }
         
         disconnect()
         registerReceiver()
@@ -96,7 +101,11 @@ object RfcommController {
                 addAction(OppoPodsAction.ACTION_ANC_SELECT)
                 addAction(OppoPodsAction.ACTION_REFRESH_STATUS)
             }
-            context?.registerReceiver(commandReceiver, filter, Context.RECEIVER_EXPORTED)
+            try {
+                context?.registerReceiver(commandReceiver, filter, 2)
+            } catch (e: Exception) {
+                context?.registerReceiver(commandReceiver, filter)
+            }
         }
     }
 
@@ -121,7 +130,7 @@ object RfcommController {
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 disconnect()
-                context?.let { currentDevice?.let { dev -> broadcastDisconnected(it, dev) } }
+                context?.let { ctx -> currentDevice?.let { dev -> broadcastDisconnected(ctx, dev) } }
             }
         }
 
@@ -144,7 +153,7 @@ object RfcommController {
                 
                 isConnected = true
                 Log.e(TAG, "🎉 华为 FreeBuds 彻底并网！")
-                context?.let { currentDevice?.let { dev -> broadcastConnected(it, dev) } }
+                context?.let { ctx -> currentDevice?.let { dev -> broadcastConnected(ctx, dev) } }
                 
                 sendCommand(Enums.QUERY_BATTERY)
                 sendCommand(Enums.QUERY_ANC)
@@ -171,7 +180,6 @@ object RfcommController {
             
             var stateChanged = false
 
-            // 🛡️ 拦截器：只有数据真正变化时才放行
             if (battery != null && battery != lastBatteryResult) {
                 lastBatteryResult = battery
                 stateChanged = true
@@ -181,18 +189,23 @@ object RfcommController {
                 stateChanged = true
             }
 
-            // 🛡️ 节流阀：即使状态发生变化，每 1.5 秒也最多只允许发送 1 次广播！
             if (stateChanged || (now - lastBroadcastTime > 3000)) {
                 lastBroadcastTime = now
                 Log.e(TAG, "📤 节流放行：向系统发送电量/降噪更新广播！")
                 
-                if (lastBatteryResult != null) broadcastBattery(lastBatteryResult!!)
-                if (lastAncMode != null) broadcastAnc(lastAncMode!!)
+                // 🛡️ 修复了这里的强转编译报错！
+                val currentBattery = lastBatteryResult
+                if (currentBattery != null) broadcastBattery(currentBattery)
                 
-                // 为了确保你看到胜利的瞬间，我们强制在屏幕弹个电量
+                val currentAnc = lastAncMode
+                if (currentAnc != null) broadcastAnc(currentAnc)
+                
+                // 🛡️ 修复了这里的 Toast 弹窗编译报错！
                 mainHandler.post { 
-                    lastBatteryResult?.let { b -> 
-                        Toast.makeText(context, "LSPosed 电量获取成功!\n左:${b.left?.level} 右:${b.right?.level}", Toast.LENGTH_SHORT).show() 
+                    context?.let { ctx ->
+                        currentBattery?.let { b ->
+                            Toast.makeText(ctx, "LSPosed 电量获取成功!\n左:${b.left?.level} 右:${b.right?.level}", Toast.LENGTH_SHORT).show() 
+                        }
                     }
                 }
             }
