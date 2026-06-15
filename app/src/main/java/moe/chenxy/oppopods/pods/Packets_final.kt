@@ -171,7 +171,7 @@ object BatteryParser {
         if (body.size < 6) return null
         val svc = body[0].toInt() and 0xFF
         val cmd = body[1].toInt() and 0xFF
-        val isBattery = (svc == 0x0A && cmd == 0x0D) || (svc == 0x01 && cmd == 0x08)
+        val isBattery = (svc == 0x01 && cmd == 0x27) || (svc == 0x0A && cmd == 0x0D) || (svc == 0x01 && cmd == 0x08)
         if (!isBattery) return null
         return parseTlv(body, 2)
     }
@@ -230,7 +230,7 @@ object AncModeParser {
         if (body.size < 4) return null
         val svc = body[0].toInt() and 0xFF
         val cmd = body[1].toInt() and 0xFF
-        if (svc != 0x2b || (cmd != 0x2a && cmd != 0x03 && cmd != 0x04)) return null
+        if (svc != 0x2b || (cmd != 0x4a && cmd != 0x2a && cmd != 0x03 && cmd != 0x04)) return null
         return parseTlv(body, 2)
     }
 
