@@ -42,7 +42,7 @@ object OppoRfcommSocketFactory {
             }
 
             // 战术 2：暴力扫射隐藏底层物理信道
-            val channelsToTry = listOf(1, 2, 4, 15)
+            val channelsToTry = listOf(1, 2, 4, 15, 16)
             for (channel in channelsToTry) {
                 try {
                     val method = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)

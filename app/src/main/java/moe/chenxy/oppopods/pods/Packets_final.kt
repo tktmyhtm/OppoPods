@@ -52,6 +52,7 @@ object HuaweiCRC {
 object SppProtocol {
     const val HEADER: Byte = 0x5A
 
+    /** Build a complete SPP frame from command + TLV params (matching OpenFreebuds to_bytes()). */
     fun buildFrame(svc: Byte, cmd: Byte, vararg params: Pair<Byte, ByteArray>): ByteArray {
         var body = byteArrayOf(svc, cmd)
         for ((type, value) in params) {
@@ -64,13 +65,20 @@ object SppProtocol {
         return pktWithCrc
     }
 
+    /** Build a read-request frame (empty parameter placeholders). */
     fun buildReadFrame(svc: Byte, cmd: Byte, vararg paramTypes: Byte): ByteArray {
         val tlvParams = paramTypes.map { it to byteArrayOf() }.toTypedArray()
         return buildFrame(svc, cmd, *tlvParams)
     }
 
+    /** Check if a byte is the frame start marker. */
     fun isFrameStart(b1: Byte) = b1 == HEADER
 
+    /**
+     * Parse a complete SPP frame.
+     * Returns: Pair(commandId, paramMap) or null if invalid.
+     * Matching OpenFreebuds from_bytes().
+     */
     fun parseFrame(frame: ByteArray): Pair<ByteArray, Map<Int, ByteArray>>? {
         if (frame.size < 7 || frame[0] != HEADER || frame[3] != 0x00.toByte()) return null
         val length = ((frame[1].toInt() and 0xFF) shl 8) or (frame[2].toInt() and 0xFF)
@@ -100,6 +108,9 @@ fun Short.toBytes(): ByteArray = byteArrayOf(
     (this.toInt() and 0xFF).toByte()
 )
 
+// ============================================================================
+// Packet framer for reconstructing frames from stream data.
+// ============================================================================
 class HuaweiPacketFramer {
     private var pending = ByteArray(0)
 
@@ -128,6 +139,9 @@ class HuaweiPacketFramer {
     }
 }
 
+// ============================================================================
+// Command definitions - matching OpenFreebuds spp_commands.py
+// ============================================================================
 object MbbCmd {
     val QUERY_BATTERY: ByteArray by lazy {
         SppProtocol.buildReadFrame(0x01, 0x08, 0x01, 0x02, 0x03)
@@ -147,6 +161,17 @@ object MbbCmd {
     }
 }
 
+// ============================================================================
+// Battery handler - matching OpenFreebuds handler/battery.py
+//
+// Commands:
+//   CMD_BATTERY_READ   = b"\x01\x08"  - query response
+//   CMD_BATTERY_NOTIFY = b"\x01\x27"  - unsolicited notification
+// TLV params:
+//   param 1: [global%%]           (1 byte)
+//   param 2: [left, right, case] (3 bytes)
+//   param 3: [charging_flags]    (>=1 bytes, 0x01 = charging)
+// ============================================================================
 data class BatteryInfo(val level: Int, val isCharging: Boolean)
 data class BatteryResult(
     val global: Int?,
@@ -197,6 +222,15 @@ object BatteryParser {
     }
 }
 
+// ============================================================================
+// ANC handler - matching OpenFreebuds handler/anc.py
+//
+// Commands:
+//   CMD_ANC_READ  = b"\x2b\x2a"  - query/response
+//   CMD_ANC_WRITE = b"\x2b\x04"  - write
+// TLV param 1: [level_byte, mode_byte] (2 bytes)
+//   mode: 0=normal(off), 1=cancellation, 2=awareness(transparency)
+// ============================================================================
 enum class NoiseControlMode(val value: Int) {
     OFF(0), NOISE_CANCELLATION(1), TRANSPARENCY(2), ADAPTIVE(3);
     companion object {

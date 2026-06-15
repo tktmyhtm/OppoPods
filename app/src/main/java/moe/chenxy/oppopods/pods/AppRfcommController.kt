@@ -43,7 +43,7 @@ class AppRfcommController {
         scope.launch {
             try {
                 delay(300)
-                socket = device.createRfcommSocketToServiceRecord(java.util.UUID.fromString("00001101-0000-1000-8000-00805f9b34fb"))
+                socket = OppoRfcommSocketFactory.connect(device, TAG)
                 socket?.connect()
                 Log.d(TAG, "RFCOMM connected to ${device.name}")
                 isConnected = true
