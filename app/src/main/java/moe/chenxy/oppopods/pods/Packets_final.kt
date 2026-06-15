@@ -1,11 +1,12 @@
 ﻿package moe.chenxy.oppopods.pods
 
 import android.util.Log
+import kotlin.math.abs
 
-/**
- * CRC16-XMODEM for Huawei SPP protocol.
- * Matches OpenFreebuds implementation exactly.
- */
+// ============================================================================
+// CRC16-XMODEM for Huawei SPP protocol.
+// Ported directly from OpenFreebuds (melianmiko/OpenFreebuds) - verified working.
+// ============================================================================
 object HuaweiCRC {
     private val TABLE = intArrayOf(
         0, 4129, 8258, 12387, 16516, 20645, 24774, 28903, -32504, -28375, -24246, -20117, -15988, -11859, -7730, -3601,
@@ -26,9 +27,9 @@ object HuaweiCRC {
         -4321, -194, -12451, -8324, -20581, -16454, -28711, -24584, 28183, 32310, 20053, 24180, 11923, 16050, 3793, 7920
     )
 
-    fun compute(data: ByteArray, length: Int): Short {
+    fun compute(data: ByteArray): Short {
         var s = 0
-        for (i in 0 until length) {
+        for (i in data.indices) {
             val idx = ((s ushr 8) xor (data[i].toInt() and 0xFF)) and 0xFF
             s = (TABLE[idx] xor (s shl 8)) and 0xFFFF
         }
@@ -36,90 +37,69 @@ object HuaweiCRC {
     }
 }
 
-/**
- * Huawei SPP protocol.
- *
- * Frame format:  5A [len_hi] [len_lo] 00 [svc] [cmd] [TLV params...] [crc_hi] [crc_lo]
- *
- * 5A:        frame header
- * len:       2-byte big-endian = total bytes after the 4-byte header
- * 00:        padding byte
- * svc:       1-byte service ID (0x0A=battery, 0x02=ANC, 0x01=generic)
- * cmd:       1-byte command ID
- * TLV:       [type:1][len:1][value:len] repeated
- * CRC16:     XMODEM, over [5A + len + 00 + svc + cmd + TLV]
- *
- * Confirmed from Huawei SmartAudio app logs:
- *   received length: 164  data: 5a00a0000a0d01...
- *   => 5A + len=0x00A0(160) + 00 + svc=0x0A + cmd=0x0D + TLV...
- */
+// ============================================================================
+// Huawei SPP Protocol - ported from OpenFreebuds HuaweiSppPackage
+//
+// Frame format:  5A [len_hi] [len_lo] 00 [cmd_hi] [cmd_lo] [TLV...] [CRC_hi] [CRC_lo]
+//
+//   5A:        magic header byte
+//   len:       2-byte big-endian = len(body) + 1  (body = cmd(2) + TLV)
+//   00:        padding byte
+//   cmd:       2-byte command ID = [svc_byte, cmd_byte]
+//   TLV:       type(1) + length(1) + value(length) repeated
+//   CRC:       CRC16-XMODEM over everything before CRC bytes
+// ============================================================================
 object SppProtocol {
     const val HEADER: Byte = 0x5A
-    const val PADDING: Byte = 0x00
 
-    fun isFrameStart(b1: Byte) = b1 == HEADER
-
-    /** Extract body (svc+cmd+TLV) from a complete SPP frame, stripping CRC. */
-    fun extractBody(frame: ByteArray): ByteArray? {
-        if (frame.size < 7 || frame[0] != HEADER) return null
-        val bodyLen = ((frame[1].toInt() and 0xFF) shl 8) or (frame[2].toInt() and 0xFF)
-        val totalSize = 4 + bodyLen
-        if (frame.size < totalSize) return null
-        // Body at offset 4; last 2 bytes are CRC
-        return frame.copyOfRange(4, totalSize - 2)
-    }
-
-    /** Build a complete SPP frame for sending to the headset. */
     fun buildFrame(svc: Byte, cmd: Byte, vararg params: Pair<Byte, ByteArray>): ByteArray {
         var body = byteArrayOf(svc, cmd)
         for ((type, value) in params) {
             body += byteArrayOf(type, value.size.toByte()) + value
         }
-        val header = byteArrayOf(HEADER, 0, 0, PADDING)
-        val bodyWithCrc = body + byteArrayOf(0, 0)
-        val totalLen = bodyWithCrc.size
-        header[1] = ((totalLen shr 8) and 0xFF).toByte()
-        header[2] = (totalLen and 0xFF).toByte()
-        val pkt = header + bodyWithCrc
-        val preCrc = pkt.copyOfRange(0, pkt.size - 2)
-        val crc = HuaweiCRC.compute(preCrc, preCrc.size)
-        pkt[pkt.size - 2] = ((crc.toInt() ushr 8) and 0xFF).toByte()
-        pkt[pkt.size - 1] = (crc.toInt() and 0xFF).toByte()
-        return pkt
+        val lengthField = (body.size + 1) and 0xFFFF
+        val header = byteArrayOf(HEADER, (lengthField shr 8).toByte(), lengthField.toByte(), 0x00)
+        val pkt = header + body
+        val pktWithCrc = pkt + HuaweiCRC.compute(pkt).toBytes()
+        return pktWithCrc
     }
 
-    /** Build a read-request frame (empty parameter placeholders). */
     fun buildReadFrame(svc: Byte, cmd: Byte, vararg paramTypes: Byte): ByteArray {
-        return buildFrame(svc, cmd, *paramTypes.map { it to byteArrayOf() }.toTypedArray())
+        val tlvParams = paramTypes.map { it to byteArrayOf() }.toTypedArray()
+        return buildFrame(svc, cmd, *tlvParams)
     }
-}
 
-/** MBB (Huawei) command definitions. */
-object MbbCmd {
-    // Battery read (svc=0x01, cmd=0x08, params 1,2,3)
-    val QUERY_BATTERY: ByteArray by lazy {
-        SppProtocol.buildReadFrame(0x01, 0x08, 0x01, 0x02, 0x03)
-    }
-    // ANC read (svc=0x2b, cmd=0x2a, params 1,2)
-    val QUERY_ANC: ByteArray by lazy {
-        SppProtocol.buildReadFrame(0x2b, 0x2a, 0x01, 0x02)
-    }
-    // ANC write (svc=0x2b, cmd=0x04, param 1 = [mode_byte, 0x00/0xff])
-    fun ancCommand(mode: NoiseControlMode): ByteArray {
-        val modeByte = when (mode) {
-            NoiseControlMode.OFF -> 0x00
-            NoiseControlMode.NOISE_CANCELLATION -> 0x01
-            NoiseControlMode.TRANSPARENCY -> 0x02
-            NoiseControlMode.ADAPTIVE -> 0x03
+    fun isFrameStart(b1: Byte) = b1 == HEADER
+
+    fun parseFrame(frame: ByteArray): Pair<ByteArray, Map<Int, ByteArray>>? {
+        if (frame.size < 7 || frame[0] != HEADER || frame[3] != 0x00.toByte()) return null
+        val length = ((frame[1].toInt() and 0xFF) shl 8) or (frame[2].toInt() and 0xFF)
+        val totalSize = 4 + length
+        val frameLen = frame.size
+        if (frameLen < totalSize) return null
+
+        val cmdId = byteArrayOf(frame[4], frame[5])
+        val params = mutableMapOf<Int, ByteArray>()
+
+        var pos = 6
+        while (pos < length + 3 && pos + 1 < frameLen) {
+            val tag = frame[pos].toInt() and 0xFF
+            val tlvLen = frame[pos + 1].toInt() and 0xFF
+            val valueStart = pos + 2
+            if (valueStart + tlvLen > frameLen) break
+            val value = frame.copyOfRange(valueStart, valueStart + tlvLen)
+            params[tag] = value
+            pos = valueStart + tlvLen
         }
-        val data = byteArrayOf(modeByte.toByte(), if (modeByte == 0) 0x00 else 0xFF.toByte())
-        return SppProtocol.buildFrame(0x2b, 0x04, 0x01.toByte() to data)
+        return Pair(cmdId, params)
     }
 }
 
-/**
- * Huawei SPP frame parser for stream-based reconstruction.
- */
+fun Short.toBytes(): ByteArray = byteArrayOf(
+    ((this.toInt() ushr 8) and 0xFF).toByte(),
+    (this.toInt() and 0xFF).toByte()
+)
+
 class HuaweiPacketFramer {
     private var pending = ByteArray(0)
 
@@ -136,10 +116,10 @@ class HuaweiPacketFramer {
             if (start > 0) pending = pending.copyOfRange(start, pending.size)
             if (pending.size < 7) break
             val bodyLen = ((pending[1].toInt() and 0xFF) shl 8) or (pending[2].toInt() and 0xFF)
-            val frameLen = 4 + bodyLen
-            if (bodyLen < 3 || frameLen > 4096) {
+            if (bodyLen < 3 || bodyLen > 4090) {
                 pending = pending.copyOfRange(1, pending.size); continue
             }
+            val frameLen = 4 + bodyLen
             if (pending.size < frameLen) break
             frames += pending.copyOfRange(0, frameLen)
             pending = pending.copyOfRange(frameLen, pending.size)
@@ -148,7 +128,24 @@ class HuaweiPacketFramer {
     }
 }
 
-// --- Battery ---
+object MbbCmd {
+    val QUERY_BATTERY: ByteArray by lazy {
+        SppProtocol.buildReadFrame(0x01, 0x08, 0x01, 0x02, 0x03)
+    }
+    val QUERY_ANC: ByteArray by lazy {
+        SppProtocol.buildReadFrame(0x2b, 0x2a, 0x01, 0x02)
+    }
+    fun ancCommand(mode: NoiseControlMode): ByteArray {
+        val modeByte = when (mode) {
+            NoiseControlMode.OFF -> 0x00
+            NoiseControlMode.NOISE_CANCELLATION -> 0x01
+            NoiseControlMode.TRANSPARENCY -> 0x02
+            NoiseControlMode.ADAPTIVE -> 0x03
+        }
+        val data = byteArrayOf(modeByte.toByte(), if (modeByte == 0) 0x00 else 0xFF.toByte())
+        return SppProtocol.buildFrame(0x2b, 0x04, 0x01.toByte() to data)
+    }
+}
 
 data class BatteryInfo(val level: Int, val isCharging: Boolean)
 data class BatteryResult(
@@ -159,61 +156,46 @@ data class BatteryResult(
 )
 
 object BatteryParser {
-    /**
-     * Parse SPP frame for battery.
-     * svc=0x0A,cmd=0x0D (battery report, from logs)
-     * svc=0x01,cmd=0x08 (query response)
-     * TLV: type=2 -> left/right/case levels (3 bytes)
-     *      type=3 -> charging flags
-     */
     fun parse(frame: ByteArray): BatteryResult? {
-        val body = SppProtocol.extractBody(frame) ?: return null
-        if (body.size < 6) return null
-        val svc = body[0].toInt() and 0xFF
-        val cmd = body[1].toInt() and 0xFF
-        val isBattery = (svc == 0x01 && cmd == 0x27) || (svc == 0x0A && cmd == 0x0D) || (svc == 0x01 && cmd == 0x08)
+        val parsed = SppProtocol.parseFrame(frame) ?: return null
+        val (cmdId, params) = parsed
+        val isBattery = (cmdId[0].toInt() and 0xFF == 0x01) &&
+                ((cmdId[1].toInt() and 0xFF == 0x27) || (cmdId[1].toInt() and 0xFF == 0x08))
         if (!isBattery) return null
-        return parseTlv(body, 2)
-    }
 
-    private fun parseTlv(data: ByteArray, off: Int): BatteryResult? {
-        var i = off; var g: Int? = null
-        var lv = -1; var rv = -1; var cv = -1
-        var lc = false; var rc = false; var cc = false
-        try {
-            while (i < data.size - 2) {
-                val tag = data[i].toInt() and 0xFF
-                val len = data[i + 1].toInt() and 0xFF
-                val vs = i + 2
-                if (vs + len > data.size) break
-                when (tag) {
-                    1 -> { if (len >= 1) g = data[vs].toInt() and 0xFF }
-                    2 -> {
-                        if (len >= 1) lv = data[vs].toInt() and 0xFF
-                        if (len >= 2) rv = data[vs + 1].toInt() and 0xFF
-                        if (len >= 3) cv = data[vs + 2].toInt() and 0xFF
-                    }
-                    3 -> {
-                        if (len >= 1) lc = data[vs].toInt() == 1
-                        if (len >= 2) rc = data[vs + 1].toInt() == 1
-                        if (len >= 3) cc = data[vs + 2].toInt() == 1
-                    }
-                }
-                i = vs + len
+        var global: Int? = null
+        var left = -1; var right = -1; var case_ = -1
+        var leftCharging = false; var rightCharging = false; var caseCharging = false
+
+        if (params.containsKey(1) && params[1]!!.size >= 1) {
+            global = params[1]!![0].toInt() and 0xFF
+        }
+        if (params.containsKey(2) && params[2]!!.size >= 1) {
+            left = params[2]!![0].toInt() and 0xFF
+            if (params[2]!!.size >= 2) right = params[2]!![1].toInt() and 0xFF
+            if (params[2]!!.size >= 3) case_ = params[2]!![2].toInt() and 0xFF
+        }
+        if (params.containsKey(3)) {
+            val charging = params[3]!!
+            if (charging.size >= 1) leftCharging = charging[0].toInt() == 1
+            if (charging.size >= 2) rightCharging = charging[1].toInt() == 1
+            if (charging.size >= 3) caseCharging = charging[2].toInt() == 1
+        }
+
+        if (left >= 0 && right >= 0) {
+            if (abs(left - right) <= 15 && left > 0 && right > 0) {
+                if (left > right) left = right else right = left
             }
-        } catch (_: Exception) { return null }
-        if (lv != -1 && rv != -1) {
-            if (kotlin.math.abs(lv - rv) <= 15 && lv > 0 && rv > 0)
-                if (lv > rv) lv = rv else rv = lv
-            return BatteryResult(g,
-                BatteryInfo(lv, lc), BatteryInfo(rv, rc),
-                if (cv >= 0) BatteryInfo(cv, cc) else null)
+            return BatteryResult(
+                global,
+                BatteryInfo(left, leftCharging),
+                BatteryInfo(right, rightCharging),
+                if (case_ >= 0) BatteryInfo(case_, caseCharging) else null
+            )
         }
         return null
     }
 }
-
-// --- ANC ---
 
 enum class NoiseControlMode(val value: Int) {
     OFF(0), NOISE_CANCELLATION(1), TRANSPARENCY(2), ADAPTIVE(3);
@@ -224,29 +206,15 @@ enum class NoiseControlMode(val value: Int) {
 }
 
 object AncModeParser {
-    /** Parse SPP frame for ANC mode. svc=0x2b, cmd=0x2a/0x03/0x04. */
     fun parse(frame: ByteArray): NoiseControlMode? {
-        val body = SppProtocol.extractBody(frame) ?: return null
-        if (body.size < 4) return null
-        val svc = body[0].toInt() and 0xFF
-        val cmd = body[1].toInt() and 0xFF
-        if (svc != 0x2b || (cmd != 0x4a && cmd != 0x2a && cmd != 0x03 && cmd != 0x04)) return null
-        return parseTlv(body, 2)
-    }
-
-    private fun parseTlv(data: ByteArray, off: Int): NoiseControlMode? {
-        var i = off
-        try {
-            while (i < data.size - 2) {
-                val tag = data[i].toInt() and 0xFF
-                val len = data[i + 1].toInt() and 0xFF
-                val vs = i + 2
-                if (vs + len > data.size) break
-                if (tag == 1 && len >= 2)
-                    return NoiseControlMode.fromByte(data[vs + 1])
-                i = vs + len
-            }
-        } catch (_: Exception) {}
+        val parsed = SppProtocol.parseFrame(frame) ?: return null
+        val (cmdId, params) = parsed
+        val svc = cmdId[0].toInt() and 0xFF
+        val cmd = cmdId[1].toInt() and 0xFF
+        if (svc != 0x2b || (cmd != 0x2a && cmd != 0x03 && cmd != 0x04)) return null
+        if (params.containsKey(1) && params[1]!!.size >= 2) {
+            return NoiseControlMode.fromByte(params[1]!![1])
+        }
         return null
     }
 }
