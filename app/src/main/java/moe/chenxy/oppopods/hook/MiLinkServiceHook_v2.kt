@@ -6,6 +6,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.View
@@ -58,10 +60,12 @@ object MiLinkServiceHook : HookContext() {
             OppoPodsAction.ACTION_REFRESH_STATUS -> lastStatusRequestMs = now
         }
         val ctx = context ?: return
-        ctx.sendBroadcast(Intent(action).apply {
+        Handler(Looper.getMainLooper()).post {
+            ctx.sendBroadcast(Intent(action).apply {
             extras()
             addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
         })
+        }
     }
 
     private var lastPanelRefreshMs = 0L
@@ -340,7 +344,7 @@ object MiLinkServiceHook : HookContext() {
         val address = runCatching { device.address }.getOrNull()
         if (address != null && isOppoAddress(address)) return true
         val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        // 🎯 全盘变更拦截前缀为华为 FreeBuds facts
+        // ð¯ å¨çåæ´æ¦æªåç¼ä¸ºåä¸º FreeBuds facts
         val result = name.contains("FreeBuds", ignoreCase = true)
         if (result && address != null) {
             knownOppoAddresses.add(address.uppercase())
@@ -484,8 +488,8 @@ object MiLinkServiceHook : HookContext() {
         val viewName = resourceEntryName(view, view.id)
         if (viewName != "mi_audio_ringing_view" && viewName != "audio_ringing_view") return null
         return when (resourceEntryName(view, resId)) {
-            "circulate_headset_control_audio_find_earphone" -> "打开空间音频"
-            "circulate_headset_control_audio_stop_find_earphone" -> "关闭空间音频"
+            "circulate_headset_control_audio_find_earphone" -> "æå¼ç©ºé´é³é¢"
+            "circulate_headset_control_audio_stop_find_earphone" -> "å³é­ç©ºé´é³é¢"
             else -> null
         }
     }
@@ -546,4 +550,5 @@ object MiLinkServiceHook : HookContext() {
         )
     }
 }
+
 
